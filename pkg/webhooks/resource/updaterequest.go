@@ -1,7 +1,6 @@
 package resource
 
 import (
-	"context"
 	"fmt"
 	"time"
 
@@ -18,18 +17,17 @@ import (
 
 // createUpdateRequests applies generate and mutateExisting policies, and creates update requests for background reconcile
 func (h *handlers) createUpdateRequests(logger logr.Logger, request *admissionv1.AdmissionRequest, policyContext *engine.PolicyContext, generatePolicies, mutatePolicies []kyvernov1.PolicyInterface, ts time.Time) {
-	gh := generation.NewGenerationHandler(logger, h.client, h.kyvernoClient, h.rclient, h.nsLister, h.urLister, h.urGenerator, h.urUpdater, h.eventGen, h.metricsConfig)
-	go h.handleMutateExisting(context.TODO(), logger, request, mutatePolicies, policyContext, ts)
-	go gh.Handle(context.TODO(), request, generatePolicies, policyContext, ts)
+	gh := generation.NewGenerationHandler(logger, h.client, h.kyvernoClient, h.nsLister, h.urLister, h.urGenerator, h.urUpdater, h.eventGen)
+	go h.handleMutateExisting(logger, request, mutatePolicies, policyContext, ts)
+	go gh.Handle(h.metricsConfig, request, generatePolicies, policyContext, ts)
 }
 
-func (h *handlers) handleMutateExisting(ctx context.Context, logger logr.Logger, request *admissionv1.AdmissionRequest, policies []kyvernov1.PolicyInterface, policyContext *engine.PolicyContext, admissionRequestTimestamp time.Time) {
+func (h *handlers) handleMutateExisting(logger logr.Logger, request *admissionv1.AdmissionRequest, policies []kyvernov1.PolicyInterface, policyContext *engine.PolicyContext, admissionRequestTimestamp time.Time) {
 	if request.Operation == admissionv1.Delete {
-		policyContext = policyContext.WithNewResource(policyContext.OldResource())
+		policyContext.NewResource = policyContext.OldResource
 	}
 
-	resource := policyContext.NewResource()
-	if request.Operation == admissionv1.Update && resource.GetDeletionTimestamp() != nil {
+	if request.Operation == admissionv1.Update && policyContext.NewResource.GetDeletionTimestamp() != nil {
 		logger.V(4).Info("skip creating UR for the trigger resource that is in termination")
 		return
 	}
@@ -42,8 +40,8 @@ func (h *handlers) handleMutateExisting(ctx context.Context, logger logr.Logger,
 		logger.V(4).Info("update request for mutateExisting policy")
 
 		var rules []response.RuleResponse
-		policyContext := policyContext.WithPolicy(policy)
-		engineResponse := engine.ApplyBackgroundChecks(h.rclient, policyContext)
+		policyContext.Policy = policy
+		engineResponse := engine.ApplyBackgroundChecks(policyContext)
 
 		for _, rule := range engineResponse.PolicyResponse.Rules {
 			if rule.Status == response.RuleStatusPass {
@@ -57,16 +55,15 @@ func (h *handlers) handleMutateExisting(ctx context.Context, logger logr.Logger,
 		}
 
 		// registering the kyverno_policy_results_total metric concurrently
-		go webhookutils.RegisterPolicyResultsMetricMutation(context.TODO(), logger, h.metricsConfig, string(request.Operation), policy, *engineResponse)
+		go webhookutils.RegisterPolicyResultsMetricMutation(logger, h.metricsConfig, string(request.Operation), policy, *engineResponse)
 		// registering the kyverno_policy_execution_duration_seconds metric concurrently
-		go webhookutils.RegisterPolicyExecutionDurationMetricMutate(context.TODO(), logger, h.metricsConfig, string(request.Operation), policy, *engineResponse)
+		go webhookutils.RegisterPolicyExecutionDurationMetricMutate(logger, h.metricsConfig, string(request.Operation), policy, *engineResponse)
 	}
 
-	if failedResponse := applyUpdateRequest(ctx, request, kyvernov1beta1.Mutate, h.urGenerator, policyContext.AdmissionInfo(), request.Operation, engineResponses...); failedResponse != nil {
+	if failedResponse := applyUpdateRequest(request, kyvernov1beta1.Mutate, h.urGenerator, policyContext.AdmissionInfo, request.Operation, engineResponses...); failedResponse != nil {
 		for _, failedUR := range failedResponse {
 			err := fmt.Errorf("failed to create update request: %v", failedUR.err)
-			resource := policyContext.NewResource()
-			events := event.NewBackgroundFailedEvent(err, failedUR.ur.Policy, "", event.GeneratePolicyController, &resource)
+			events := event.NewBackgroundFailedEvent(err, failedUR.ur.Policy, "", event.GeneratePolicyController, &policyContext.NewResource)
 			h.eventGen.Add(events...)
 		}
 	}

@@ -28,4 +28,5 @@ rules:
     - patch
     - update
     - watch
+
 {{- end }}

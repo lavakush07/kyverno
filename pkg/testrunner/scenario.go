@@ -2,7 +2,6 @@ package testrunner
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"os"
 	ospath "path"
@@ -14,8 +13,8 @@ import (
 	kyvernov1 "github.com/kyverno/kyverno/api/kyverno/v1"
 	"github.com/kyverno/kyverno/pkg/clients/dclient"
 	"github.com/kyverno/kyverno/pkg/engine"
+	"github.com/kyverno/kyverno/pkg/engine/context"
 	"github.com/kyverno/kyverno/pkg/engine/response"
-	"github.com/kyverno/kyverno/pkg/registryclient"
 	"github.com/stretchr/testify/assert"
 	"gopkg.in/yaml.v3"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -144,9 +143,14 @@ func runTestCase(t *testing.T, tc TestCase) bool {
 		t.FailNow()
 	}
 
-	policyContext := engine.NewPolicyContext().WithPolicy(policy).WithNewResource(*resource)
+	ctx := &engine.PolicyContext{
+		Policy:           policy,
+		NewResource:      *resource,
+		ExcludeGroupRole: []string{},
+		JSONContext:      context.NewContext(),
+	}
 
-	er := engine.Mutate(context.TODO(), registryclient.NewOrDie(), policyContext)
+	er := engine.Mutate(ctx)
 	t.Log("---Mutation---")
 	validateResource(t, er.PatchedResource, tc.Expected.Mutation.PatchedResource)
 	validateResponse(t, er.PolicyResponse, tc.Expected.Mutation.PolicyResponse)
@@ -156,9 +160,14 @@ func runTestCase(t *testing.T, tc TestCase) bool {
 		resource = &er.PatchedResource
 	}
 
-	policyContext = policyContext.WithNewResource(*resource)
+	ctx = &engine.PolicyContext{
+		Policy:           policy,
+		NewResource:      *resource,
+		ExcludeGroupRole: []string{},
+		JSONContext:      context.NewContext(),
+	}
 
-	er = engine.Validate(context.TODO(), registryclient.NewOrDie(), policyContext)
+	er = engine.Validate(ctx)
 	t.Log("---Validation---")
 	validateResponse(t, er.PolicyResponse, tc.Expected.Validation.PolicyResponse)
 
@@ -172,9 +181,18 @@ func runTestCase(t *testing.T, tc TestCase) bool {
 		if err := createNamespace(client, resource); err != nil {
 			t.Error(err)
 		} else {
-			policyContext := policyContext.WithClient(client)
+			policyContext := &engine.PolicyContext{
+				NewResource:      *resource,
+				Policy:           policy,
+				Client:           client,
+				ExcludeGroupRole: []string{},
+				ExcludeResourceFunc: func(s1, s2, s3 string) bool {
+					return false
+				},
+				JSONContext: context.NewContext(),
+			}
 
-			er = engine.ApplyBackgroundChecks(registryclient.NewOrDie(), policyContext)
+			er = engine.ApplyBackgroundChecks(policyContext)
 			t.Log(("---Generation---"))
 			validateResponse(t, er.PolicyResponse, tc.Expected.Generation.PolicyResponse)
 			// Expected generate resource will be in same namespaces as resource
@@ -185,7 +203,7 @@ func runTestCase(t *testing.T, tc TestCase) bool {
 }
 
 func createNamespace(client dclient.Interface, ns *unstructured.Unstructured) error {
-	_, err := client.CreateResource(context.TODO(), "", "Namespace", "", ns, false)
+	_, err := client.CreateResource("", "Namespace", "", ns, false)
 	return err
 }
 
@@ -194,7 +212,7 @@ func validateGeneratedResources(t *testing.T, client dclient.Interface, policy k
 	t.Log("--validate if resources are generated---")
 	// list of expected generated resources
 	for _, resource := range expected {
-		if _, err := client.GetResource(context.TODO(), "", resource.Kind, namespace, resource.Name); err != nil {
+		if _, err := client.GetResource("", resource.Kind, namespace, resource.Name); err != nil {
 			t.Errorf("generated resource %s/%s/%s not found. %v", resource.Kind, namespace, resource.Name, err)
 		}
 	}

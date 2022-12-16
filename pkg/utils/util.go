@@ -34,6 +34,14 @@ func CopyMap(m map[string]interface{}) map[string]interface{} {
 	return mapCopy
 }
 
+// CopySlice creates a full copy of the target slice
+func CopySlice(s []interface{}) []interface{} {
+	sliceCopy := make([]interface{}, len(s))
+	copy(sliceCopy, s)
+
+	return sliceCopy
+}
+
 // CopySliceOfMaps creates a full copy of the target slice
 func CopySliceOfMaps(s []map[string]interface{}) []interface{} {
 	sliceCopy := make([]interface{}, len(s))
@@ -78,12 +86,21 @@ func ContainsNamepace(patterns []string, ns string) bool {
 	return contains(patterns, ns, comparePatterns)
 }
 
+// ContainsString checks if the string is contained in the list
+func ContainsString(list []string, element string) bool {
+	return contains(list, element, compareString)
+}
+
 func ContainsWildcardPatterns(patterns []string, key string) bool {
 	return contains(patterns, key, comparePatterns)
 }
 
 func comparePatterns(pattern, ns string) bool {
 	return wildcard.Match(pattern, ns)
+}
+
+func compareString(str, name string) bool {
+	return str == name
 }
 
 // CRDsInstalled checks if the Kyverno CRDs are installed or not
@@ -199,64 +216,6 @@ func NormalizeSecret(resource *unstructured.Unstructured) (unstructured.Unstruct
 	return *resource, nil
 }
 
-// RedactSecret masks keys of data and metadata.annotation fields of Secrets.
-func RedactSecret(resource *unstructured.Unstructured) (unstructured.Unstructured, error) {
-	var secret *corev1.Secret
-	data, err := json.Marshal(resource.Object)
-	if err != nil {
-		return *resource, err
-	}
-	err = json.Unmarshal(data, &secret)
-	if err != nil {
-		return *resource, errors.Wrap(err, "unable to convert object to secret")
-	}
-	stringSecret := struct {
-		Data map[string]string `json:"string_data"`
-		*corev1.Secret
-	}{
-		Data:   make(map[string]string),
-		Secret: secret,
-	}
-	for key := range secret.Data {
-		secret.Data[key] = []byte("**REDACTED**")
-		stringSecret.Data[key] = string(secret.Data[key])
-	}
-	for key := range secret.Annotations {
-		secret.Annotations[key] = "**REDACTED**"
-	}
-	updateSecret := map[string]interface{}{}
-	raw, err := json.Marshal(stringSecret)
-	if err != nil {
-		return *resource, nil
-	}
-	err = json.Unmarshal(raw, &updateSecret)
-	if err != nil {
-		return *resource, errors.Wrap(err, "unable to convert object from secret")
-	}
-	if secret.Data != nil {
-		v := updateSecret["string_data"].(map[string]interface{})
-		err = unstructured.SetNestedMap(resource.Object, v, "data")
-		if err != nil {
-			return *resource, errors.Wrap(err, "failed to set secret.data")
-		}
-	}
-	if secret.Annotations != nil {
-		metadata, err := ToMap(resource.Object["metadata"])
-		if err != nil {
-			return *resource, errors.Wrap(err, "unable to convert metadata to map")
-		}
-		updatedMeta := updateSecret["metadata"].(map[string]interface{})
-		if err != nil {
-			return *resource, errors.Wrap(err, "unable to convert object from secret")
-		}
-		err = unstructured.SetNestedMap(metadata, updatedMeta["annotations"].(map[string]interface{}), "annotations")
-		if err != nil {
-			return *resource, errors.Wrap(err, "failed to set secret.annotations")
-		}
-	}
-	return *resource, nil
-}
-
 // HigherThanKubernetesVersion compare Kubernetes client version to user given version
 func HigherThanKubernetesVersion(client discovery.ServerVersionInterface, log logr.Logger, major, minor, patch int) bool {
 	logger := log.WithName("CompareKubernetesVersion")
@@ -311,11 +270,13 @@ func SliceContains(slice []string, values ...string) bool {
 	for _, sliceElement := range slice {
 		sliceElementsMap[sliceElement] = true
 	}
+
 	for _, value := range values {
 		if sliceElementsMap[value] {
 			return true
 		}
 	}
+
 	return false
 }
 

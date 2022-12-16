@@ -10,20 +10,14 @@ import (
 func Test_Apply(t *testing.T) {
 	type TestCase struct {
 		PolicyPaths           []string
-		GitBranch             string
 		ResourcePaths         []string
-		Cluster               bool
 		expectedPolicyReports []preport.PolicyReport
-		config                ApplyCommandConfig
 	}
 
 	testcases := []TestCase{
 		{
-			config: ApplyCommandConfig{
-				PolicyPaths:   []string{"../../../../test/best_practices/disallow_latest_tag.yaml"},
-				ResourcePaths: []string{"../../../../test/resources/pod_with_version_tag.yaml"},
-				PolicyReport:  true,
-			},
+			PolicyPaths:   []string{"../../../../test/best_practices/disallow_latest_tag.yaml"},
+			ResourcePaths: []string{"../../../../test/resources/pod_with_version_tag.yaml"},
 			expectedPolicyReports: []preport.PolicyReport{
 				{
 					Summary: preport.PolicyReportSummary{
@@ -37,11 +31,8 @@ func Test_Apply(t *testing.T) {
 			},
 		},
 		{
-			config: ApplyCommandConfig{
-				PolicyPaths:   []string{"../../../../test/best_practices/disallow_latest_tag.yaml"},
-				ResourcePaths: []string{"../../../../test/resources/pod_with_latest_tag.yaml"},
-				PolicyReport:  true,
-			},
+			PolicyPaths:   []string{"../../../../test/best_practices/disallow_latest_tag.yaml"},
+			ResourcePaths: []string{"../../../../test/resources/pod_with_latest_tag.yaml"},
 			expectedPolicyReports: []preport.PolicyReport{
 				{
 					Summary: preport.PolicyReportSummary{
@@ -55,11 +46,8 @@ func Test_Apply(t *testing.T) {
 			},
 		},
 		{
-			config: ApplyCommandConfig{
-				PolicyPaths:   []string{"../../../../test/cli/apply/policies"},
-				ResourcePaths: []string{"../../../../test/cli/apply/resource"},
-				PolicyReport:  true,
-			},
+			PolicyPaths:   []string{"../../../../test/cli/apply/policies"},
+			ResourcePaths: []string{"../../../../test/cli/apply/resource"},
 			expectedPolicyReports: []preport.PolicyReport{
 				{
 					Summary: preport.PolicyReportSummary{
@@ -68,44 +56,6 @@ func Test_Apply(t *testing.T) {
 						Skip:  8,
 						Error: 0,
 						Warn:  2,
-					},
-				},
-			},
-		},
-		{
-			config: ApplyCommandConfig{
-				PolicyPaths:  []string{"https://github.com/kyverno/policies/openshift/team-validate-ns-name/"},
-				GitBranch:    "main",
-				PolicyReport: true,
-				Cluster:      true,
-			},
-			expectedPolicyReports: []preport.PolicyReport{
-				{
-					Summary: preport.PolicyReportSummary{
-						Pass:  6,
-						Fail:  0,
-						Skip:  0,
-						Error: 0,
-						Warn:  0,
-					},
-				},
-			},
-		},
-		{
-			config: ApplyCommandConfig{
-				PolicyPaths:   []string{"../../../../test/best_practices/disallow_latest_tag.yaml"},
-				ResourcePaths: []string{"../../../../test/resources/pod_with_latest_tag.yaml"},
-				PolicyReport:  true,
-				AuditWarn:     true,
-			},
-			expectedPolicyReports: []preport.PolicyReport{
-				{
-					Summary: preport.PolicyReportSummary{
-						Pass:  1,
-						Fail:  0,
-						Skip:  0,
-						Error: 0,
-						Warn:  1,
 					},
 				},
 			},
@@ -121,7 +71,7 @@ func Test_Apply(t *testing.T) {
 	}
 
 	for _, tc := range testcases {
-		_, _, _, info, _ := tc.config.applyCommandHelper()
+		_, _, _, info, _ := applyCommandHelper(tc.ResourcePaths, "", false, true, "", "", "", "", tc.PolicyPaths, false, false)
 		resps := buildPolicyReports(info)
 		for i, resp := range resps {
 			compareSummary(tc.expectedPolicyReports[i].Summary, resp.UnstructuredContent()["summary"].(map[string]interface{}))

@@ -1,7 +1,6 @@
 package auth
 
 import (
-	"context"
 	"testing"
 
 	"github.com/kyverno/kyverno/pkg/clients/dclient"
@@ -81,7 +80,7 @@ func TestCanIOptions_RunAccessCheck(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			o := NewCanI(tt.fields.client, tt.fields.kind, tt.fields.namespace, tt.fields.verb)
-			got, err := o.RunAccessCheck(context.TODO())
+			got, err := o.RunAccessCheck()
 			if tt.wantErr {
 				assert.Error(t, err)
 			} else {

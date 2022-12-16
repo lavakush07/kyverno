@@ -9,7 +9,7 @@ import (
 	"github.com/kyverno/kyverno/pkg/policy/generate"
 	"github.com/kyverno/kyverno/pkg/policy/mutate"
 	"github.com/kyverno/kyverno/pkg/policy/validate"
-	"golang.org/x/exp/slices"
+	"github.com/kyverno/kyverno/pkg/utils"
 )
 
 // Validation provides methods to validate a rule
@@ -61,7 +61,7 @@ func validateActions(idx int, rule *kyvernov1.Rule, client dclient.Interface, mo
 			}
 		}
 
-		if slices.Contains(rule.MatchResources.Kinds, rule.Generation.Kind) {
+		if utils.ContainsString(rule.MatchResources.Kinds, rule.Generation.Kind) {
 			return fmt.Errorf("generation kind and match resource kind should not be the same")
 		}
 	}

@@ -1,7 +1,6 @@
 package cosign
 
 import (
-	"context"
 	"crypto/x509"
 	"fmt"
 	"io"
@@ -9,7 +8,6 @@ import (
 
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/types"
-	"github.com/kyverno/kyverno/pkg/registryclient"
 	"github.com/sigstore/cosign/pkg/cosign"
 	"github.com/sigstore/cosign/pkg/cosign/bundle"
 	"github.com/sigstore/cosign/pkg/oci"
@@ -78,18 +76,15 @@ func TestCosignKeyless(t *testing.T) {
 		Subject:  "jim",
 	}
 
-	client, err := registryclient.New()
-	assert.NilError(t, err)
-
-	_, err = VerifySignature(context.TODO(), client, opts)
+	_, err := VerifySignature(opts)
 	assert.ErrorContains(t, err, "subject mismatch: expected jim, received jim@nirmata.com")
 
 	opts.Subject = "jim@nirmata.com"
-	_, err = VerifySignature(context.TODO(), client, opts)
+	_, err = VerifySignature(opts)
 	assert.ErrorContains(t, err, "issuer mismatch: expected https://github.com/, received https://github.com/login/oauth")
 
 	opts.Issuer = "https://github.com/login/oauth"
-	_, err = VerifySignature(context.TODO(), client, opts)
+	_, err = VerifySignature(opts)
 	assert.NilError(t, err)
 }
 

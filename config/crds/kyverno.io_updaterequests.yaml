@@ -11,6 +11,7 @@ spec:
   names:
     categories:
     - kyverno
+    - all
     kind: UpdateRequest
     listKind: UpdateRequestList
     plural: updaterequests
