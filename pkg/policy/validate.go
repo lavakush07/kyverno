@@ -25,7 +25,6 @@ import (
 	"github.com/kyverno/kyverno/pkg/utils"
 	kubeutils "github.com/kyverno/kyverno/pkg/utils/kube"
 	"github.com/pkg/errors"
-	"golang.org/x/exp/slices"
 	"k8s.io/apiextensions-apiserver/pkg/apis/apiextensions"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -80,49 +79,6 @@ func validateJSONPatchPathForForwardSlash(patch string) error {
 	return nil
 }
 
-func validateJSONPatch(patch string, ruleIdx int) error {
-	patch = variables.ReplaceAllVars(patch, func(s string) string { return "kyvernojsonpatchvariable" })
-
-	jsonPatch, err := yaml.ToJSON([]byte(patch))
-	if err != nil {
-		return err
-	}
-
-	decodedPatch, err := jsonpatch.DecodePatch(jsonPatch)
-	if err != nil {
-		return err
-	}
-
-	for _, operation := range decodedPatch {
-		op := operation.Kind()
-		if op != "add" && op != "remove" && op != "replace" {
-			return fmt.Errorf("Unexpected kind: spec.rules[%d]: %s", ruleIdx, op)
-		}
-		v, _ := operation.ValueInterface()
-		if v != nil {
-			vs := fmt.Sprintf("%v", v)
-			if strings.ContainsAny(vs, `"`) || strings.ContainsAny(vs, `'`) {
-				return fmt.Errorf("missing quote around value: spec.rules[%d]: %s", ruleIdx, vs)
-			}
-		}
-	}
-
-	return nil
-}
-
-func checkValidationFailureAction(spec *kyvernov1.Spec) []string {
-	msg := "Validation failure actions enforce/audit are deprecated, use Enforce/Audit instead."
-	if spec.ValidationFailureAction == "enforce" || spec.ValidationFailureAction == "audit" {
-		return []string{msg}
-	}
-	for _, override := range spec.ValidationFailureActionOverrides {
-		if override.Action == "enforce" || override.Action == "audit" {
-			return []string{msg}
-		}
-	}
-	return nil
-}
-
 // Validate checks the policy and rules declarations for required configurations
 func Validate(policy kyvernov1.PolicyInterface, client dclient.Interface, mock bool, openApiManager openapi.Manager) ([]string, error) {
 	var warnings []string
@@ -134,7 +90,6 @@ func Validate(policy kyvernov1.PolicyInterface, client dclient.Interface, mock b
 		openapicontroller.NewController(client, openApiManager).CheckSync(context.TODO())
 	}
 
-	warnings = append(warnings, checkValidationFailureAction(spec)...)
 	var errs field.ErrorList
 	specPath := field.NewPath("spec")
 
@@ -192,9 +147,6 @@ func Validate(policy kyvernov1.PolicyInterface, client dclient.Interface, mock b
 		// check for forward slash
 		if err := validateJSONPatchPathForForwardSlash(rule.Mutation.PatchesJSON6902); err != nil {
 			return warnings, fmt.Errorf("path must begin with a forward slash: spec.rules[%d]: %s", i, err)
-		}
-		if err := validateJSONPatch(rule.Mutation.PatchesJSON6902, i); err != nil {
-			return warnings, fmt.Errorf("%s", err)
 		}
 
 		if jsonPatchOnPod(rule) {
@@ -278,7 +230,7 @@ func Validate(policy kyvernov1.PolicyInterface, client dclient.Interface, mock b
 			if wildcardErr != nil {
 				return warnings, wildcardErr
 			}
-			if !slices.Contains(value.ResourceDescription.Kinds, "*") {
+			if !utils.ContainsString(value.ResourceDescription.Kinds, "*") {
 				err := validateKinds(value.ResourceDescription.Kinds, mock, client, policy)
 				if err != nil {
 					return warnings, errors.Wrapf(err, "the kind defined in the any match resource is invalid")
@@ -290,7 +242,7 @@ func Validate(policy kyvernov1.PolicyInterface, client dclient.Interface, mock b
 			if wildcardErr != nil {
 				return warnings, wildcardErr
 			}
-			if !slices.Contains(value.ResourceDescription.Kinds, "*") {
+			if !utils.ContainsString(value.ResourceDescription.Kinds, "*") {
 				err := validateKinds(value.ResourceDescription.Kinds, mock, client, policy)
 				if err != nil {
 					return warnings, errors.Wrapf(err, "the kind defined in the all match resource is invalid")
@@ -302,7 +254,7 @@ func Validate(policy kyvernov1.PolicyInterface, client dclient.Interface, mock b
 			if wildcardErr != nil {
 				return warnings, wildcardErr
 			}
-			if !slices.Contains(value.ResourceDescription.Kinds, "*") {
+			if !utils.ContainsString(value.ResourceDescription.Kinds, "*") {
 				err := validateKinds(value.ResourceDescription.Kinds, mock, client, policy)
 				if err != nil {
 					return warnings, errors.Wrapf(err, "the kind defined in the any exclude resource is invalid")
@@ -314,7 +266,7 @@ func Validate(policy kyvernov1.PolicyInterface, client dclient.Interface, mock b
 			if wildcardErr != nil {
 				return warnings, wildcardErr
 			}
-			if !slices.Contains(value.ResourceDescription.Kinds, "*") {
+			if !utils.ContainsString(value.ResourceDescription.Kinds, "*") {
 				err := validateKinds(value.ResourceDescription.Kinds, mock, client, policy)
 				if err != nil {
 					return warnings, errors.Wrapf(err, "the kind defined in the all exclude resource is invalid")
@@ -322,7 +274,7 @@ func Validate(policy kyvernov1.PolicyInterface, client dclient.Interface, mock b
 			}
 		}
 
-		if !slices.Contains(rule.MatchResources.Kinds, "*") {
+		if !utils.ContainsString(rule.MatchResources.Kinds, "*") {
 			err := validateKinds(rule.MatchResources.Kinds, mock, client, policy)
 			if err != nil {
 				return warnings, errors.Wrapf(err, "match resource kind is invalid")
@@ -349,7 +301,7 @@ func Validate(policy kyvernov1.PolicyInterface, client dclient.Interface, mock b
 
 		// add label to source mentioned in policy
 		if !mock && rule.Generation.Clone.Name != "" {
-			obj, err := client.GetResource(context.TODO(), "", rule.Generation.Kind, rule.Generation.Clone.Namespace, rule.Generation.Clone.Name)
+			obj, err := client.GetResource("", rule.Generation.Kind, rule.Generation.Clone.Namespace, rule.Generation.Clone.Name)
 			if err != nil {
 				logging.Error(err, fmt.Sprintf("source resource %s/%s/%s not found.", rule.Generation.Kind, rule.Generation.Clone.Namespace, rule.Generation.Clone.Name))
 				continue
@@ -364,13 +316,13 @@ func Validate(policy kyvernov1.PolicyInterface, client dclient.Interface, mock b
 		if !mock && len(rule.Generation.CloneList.Kinds) != 0 {
 			for _, kind := range rule.Generation.CloneList.Kinds {
 				apiVersion, kind := kubeutils.GetKindFromGVK(kind)
-				resources, err := client.ListResource(context.TODO(), apiVersion, kind, rule.Generation.CloneList.Namespace, rule.Generation.CloneList.Selector)
+				resources, err := client.ListResource(apiVersion, kind, rule.Generation.CloneList.Namespace, rule.Generation.CloneList.Selector)
 				if err != nil {
 					logging.Error(err, fmt.Sprintf("failed to list resources %s/%s.", kind, rule.Generation.CloneList.Namespace))
 					continue
 				}
 				for _, rName := range resources.Items {
-					obj, err := client.GetResource(context.TODO(), apiVersion, kind, rule.Generation.CloneList.Namespace, rName.GetName())
+					obj, err := client.GetResource(apiVersion, kind, rule.Generation.CloneList.Namespace, rName.GetName())
 					if err != nil {
 						logging.Error(err, fmt.Sprintf("source resource %s/%s/%s not found.", kind, rule.Generation.Clone.Namespace, rule.Generation.Clone.Name))
 						continue
@@ -418,7 +370,7 @@ func UpdateSourceResource(client dclient.Interface, kind, namespace string, poli
 		obj.SetLabels(label)
 		obj.SetResourceVersion("")
 
-		_, err := client.UpdateResource(context.TODO(), obj.GetAPIVersion(), kind, namespace, obj, false)
+		_, err := client.UpdateResource(obj.GetAPIVersion(), kind, namespace, obj, false)
 		if err != nil {
 			logging.Error(err, "failed to update source", "kind", obj.GetKind(), "name", obj.GetName(), "namespace", obj.GetNamespace())
 			return err
@@ -1140,7 +1092,7 @@ func jsonPatchOnPod(rule kyvernov1.Rule) bool {
 		return false
 	}
 
-	if slices.Contains(rule.MatchResources.Kinds, "Pod") && rule.Mutation.PatchesJSON6902 != "" {
+	if utils.ContainsString(rule.MatchResources.Kinds, "Pod") && rule.Mutation.PatchesJSON6902 != "" {
 		return true
 	}
 
@@ -1164,13 +1116,13 @@ func podControllerAutoGenExclusion(policy kyvernov1.PolicyInterface) bool {
 
 // validateWildcard check for an Match/Exclude block contains "*"
 func validateWildcard(kinds []string, spec *kyvernov1.Spec, rule kyvernov1.Rule) error {
-	if slices.Contains(kinds, "*") && spec.BackgroundProcessingEnabled() {
+	if utils.ContainsString(kinds, "*") && spec.BackgroundProcessingEnabled() {
 		return fmt.Errorf("wildcard policy not allowed in background mode. Set spec.background=false to disable background mode for this policy rule ")
 	}
-	if slices.Contains(kinds, "*") && len(kinds) > 1 {
+	if utils.ContainsString(kinds, "*") && len(kinds) > 1 {
 		return fmt.Errorf("wildard policy can not deal more than one kind")
 	}
-	if slices.Contains(kinds, "*") {
+	if utils.ContainsString(kinds, "*") {
 		if rule.HasGenerate() || rule.HasVerifyImages() || rule.Validation.ForEachValidation != nil {
 			return fmt.Errorf("wildcard policy does not support rule type")
 		}
@@ -1248,31 +1200,32 @@ func validateWildcardsWithNamespaces(enforce, audit, enforceW, auditW []string) 
 
 func validateNamespaces(s *kyvernov1.Spec, path *field.Path) error {
 	action := map[string]sets.String{
-		"enforce":  sets.NewString(),
-		"audit":    sets.NewString(),
-		"enforceW": sets.NewString(),
-		"auditW":   sets.NewString(),
+		string(kyvernov1.Enforce): sets.NewString(),
+		string(kyvernov1.Audit):   sets.NewString(),
+		"enforceW":                sets.NewString(),
+		"auditW":                  sets.NewString(),
 	}
 
 	for i, vfa := range s.ValidationFailureActionOverrides {
 		patternList, nsList := utils.SeperateWildcards(vfa.Namespaces)
 
-		if vfa.Action.Audit() {
-			if action["enforce"].HasAny(nsList...) {
+		if vfa.Action == kyvernov1.Audit {
+			if action[string(kyvernov1.Enforce)].HasAny(nsList...) {
 				return fmt.Errorf("conflicting namespaces found in path: %s: %s", path.Index(i).Child("namespaces").String(),
-					strings.Join(action["enforce"].Intersection(sets.NewString(nsList...)).List(), ", "))
+					strings.Join(action[string(kyvernov1.Enforce)].Intersection(sets.NewString(nsList...)).List(), ", "))
 			}
 			action["auditW"].Insert(patternList...)
-		} else if vfa.Action.Enforce() {
-			if action["audit"].HasAny(nsList...) {
+		} else if vfa.Action == kyvernov1.Enforce {
+			if action[string(kyvernov1.Audit)].HasAny(nsList...) {
 				return fmt.Errorf("conflicting namespaces found in path: %s: %s", path.Index(i).Child("namespaces").String(),
-					strings.Join(action["audit"].Intersection(sets.NewString(nsList...)).List(), ", "))
+					strings.Join(action[string(kyvernov1.Audit)].Intersection(sets.NewString(nsList...)).List(), ", "))
 			}
 			action["enforceW"].Insert(patternList...)
 		}
-		action[strings.ToLower(string(vfa.Action))].Insert(nsList...)
+		action[string(vfa.Action)].Insert(nsList...)
 
-		err := validateWildcardsWithNamespaces(action["enforce"].List(), action["audit"].List(), action["enforceW"].List(), action["auditW"].List())
+		err := validateWildcardsWithNamespaces(action[string(kyvernov1.Enforce)].List(),
+			action[string(kyvernov1.Audit)].List(), action["enforceW"].List(), action["auditW"].List())
 		if err != nil {
 			return fmt.Errorf("path: %s: %s", path.Index(i).Child("namespaces").String(), err.Error())
 		}

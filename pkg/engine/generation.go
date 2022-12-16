@@ -17,10 +17,10 @@ func GenerateResponse(policyContext *PolicyContext, gr kyvernov1beta1.UpdateRequ
 }
 
 func filterGenerateRules(policyContext *PolicyContext, policyNameKey string, startTime time.Time) *response.EngineResponse {
-	kind := policyContext.newResource.GetKind()
-	name := policyContext.newResource.GetName()
-	namespace := policyContext.newResource.GetNamespace()
-	apiVersion := policyContext.newResource.GetAPIVersion()
+	kind := policyContext.NewResource.GetKind()
+	name := policyContext.NewResource.GetName()
+	namespace := policyContext.NewResource.GetNamespace()
+	apiVersion := policyContext.NewResource.GetAPIVersion()
 	pNamespace, pName, err := cache.SplitMetaNamespaceKey(policyNameKey)
 	if err != nil {
 		logging.Error(err, "failed to spilt name and namespace", policyNameKey)
@@ -44,12 +44,12 @@ func filterGenerateRules(policyContext *PolicyContext, policyNameKey string, sta
 		},
 	}
 
-	if policyContext.excludeResourceFunc(kind, namespace, name) {
+	if policyContext.ExcludeResourceFunc(kind, namespace, name) {
 		logging.WithName("Generate").Info("resource excluded", "kind", kind, "namespace", namespace, "name", name)
 		return resp
 	}
 
-	for _, rule := range autogen.ComputeRules(policyContext.policy) {
+	for _, rule := range autogen.ComputeRules(policyContext.Policy) {
 		if ruleResp := filterRule(rule, policyContext); ruleResp != nil {
 			resp.PolicyResponse.Rules = append(resp.PolicyResponse.Rules, *ruleResp)
 		}

@@ -17,6 +17,7 @@ import (
 	"github.com/kyverno/kyverno/pkg/config"
 	"github.com/kyverno/kyverno/pkg/controllers"
 	"github.com/kyverno/kyverno/pkg/tls"
+	"github.com/kyverno/kyverno/pkg/toggle"
 	controllerutils "github.com/kyverno/kyverno/pkg/utils/controller"
 	kubeutils "github.com/kyverno/kyverno/pkg/utils/kube"
 	runtimeutils "github.com/kyverno/kyverno/pkg/utils/runtime"
@@ -438,11 +439,11 @@ func (c *controller) updatePolicyStatuses(ctx context.Context) error {
 		status := policy.GetStatus()
 		status.SetReady(ready)
 		status.Autogen.Rules = nil
-		rules := autogen.ComputeRules(policy)
-		setRuleCount(rules, status)
-		for _, rule := range rules {
-			if strings.HasPrefix(rule.Name, "autogen-") {
-				status.Autogen.Rules = append(status.Autogen.Rules, rule)
+		if toggle.AutogenInternals.Enabled() {
+			for _, rule := range autogen.ComputeRules(policy) {
+				if strings.HasPrefix(rule.Name, "autogen-") {
+					status.Autogen.Rules = append(status.Autogen.Rules, rule)
+				}
 			}
 		}
 		return nil
@@ -526,7 +527,7 @@ func (c *controller) buildVerifyMutatingWebhookConfiguration(caBundle []byte) (*
 				FailurePolicy:           &ignore,
 				SideEffects:             &noneOnDryRun,
 				ReinvocationPolicy:      &ifNeeded,
-				AdmissionReviewVersions: []string{"v1"},
+				AdmissionReviewVersions: []string{"v1beta1"},
 				ObjectSelector: &metav1.LabelSelector{
 					MatchLabels: map[string]string{
 						"app.kubernetes.io/name": kyvernov1.ValueKyvernoApp,
@@ -553,7 +554,7 @@ func (c *controller) buildPolicyMutatingWebhookConfiguration(caBundle []byte) (*
 				FailurePolicy:           &ignore,
 				SideEffects:             &noneOnDryRun,
 				ReinvocationPolicy:      &ifNeeded,
-				AdmissionReviewVersions: []string{"v1"},
+				AdmissionReviewVersions: []string{"v1beta1"},
 			}},
 		},
 		nil
@@ -574,7 +575,7 @@ func (c *controller) buildPolicyValidatingWebhookConfiguration(caBundle []byte) 
 				}},
 				FailurePolicy:           &ignore,
 				SideEffects:             &none,
-				AdmissionReviewVersions: []string{"v1"},
+				AdmissionReviewVersions: []string{"v1beta1"},
 			}},
 		},
 		nil
@@ -599,7 +600,7 @@ func (c *controller) buildDefaultResourceMutatingWebhookConfiguration(caBundle [
 				}},
 				FailurePolicy:           &ignore,
 				SideEffects:             &noneOnDryRun,
-				AdmissionReviewVersions: []string{"v1"},
+				AdmissionReviewVersions: []string{"v1beta1"},
 				TimeoutSeconds:          &c.defaultTimeout,
 				ReinvocationPolicy:      &ifNeeded,
 			}},
@@ -646,12 +647,14 @@ func (c *controller) buildResourceMutatingWebhookConfiguration(caBundle []byte) 
 			result.Webhooks = append(
 				result.Webhooks,
 				admissionregistrationv1.MutatingWebhook{
-					Name:                    config.MutatingWebhookName + "-ignore",
-					ClientConfig:            c.clientConfig(caBundle, config.MutatingWebhookServicePath+"/ignore"),
-					Rules:                   ignore.buildRulesWithOperations(admissionregistrationv1.Create, admissionregistrationv1.Update),
+					Name:         config.MutatingWebhookName + "-ignore",
+					ClientConfig: c.clientConfig(caBundle, config.MutatingWebhookServicePath+"/ignore"),
+					Rules: []admissionregistrationv1.RuleWithOperations{
+						ignore.buildRuleWithOperations(admissionregistrationv1.Create, admissionregistrationv1.Update),
+					},
 					FailurePolicy:           &ignore.failurePolicy,
 					SideEffects:             &noneOnDryRun,
-					AdmissionReviewVersions: []string{"v1"},
+					AdmissionReviewVersions: []string{"v1beta1"},
 					NamespaceSelector:       webhookCfg.NamespaceSelector,
 					ObjectSelector:          webhookCfg.ObjectSelector,
 					TimeoutSeconds:          &ignore.maxWebhookTimeout,
@@ -663,12 +666,14 @@ func (c *controller) buildResourceMutatingWebhookConfiguration(caBundle []byte) 
 			result.Webhooks = append(
 				result.Webhooks,
 				admissionregistrationv1.MutatingWebhook{
-					Name:                    config.MutatingWebhookName + "-fail",
-					ClientConfig:            c.clientConfig(caBundle, config.MutatingWebhookServicePath+"/fail"),
-					Rules:                   fail.buildRulesWithOperations(admissionregistrationv1.Create, admissionregistrationv1.Update),
+					Name:         config.MutatingWebhookName + "-fail",
+					ClientConfig: c.clientConfig(caBundle, config.MutatingWebhookServicePath+"/fail"),
+					Rules: []admissionregistrationv1.RuleWithOperations{
+						fail.buildRuleWithOperations(admissionregistrationv1.Create, admissionregistrationv1.Update),
+					},
 					FailurePolicy:           &fail.failurePolicy,
 					SideEffects:             &noneOnDryRun,
-					AdmissionReviewVersions: []string{"v1"},
+					AdmissionReviewVersions: []string{"v1beta1"},
 					NamespaceSelector:       webhookCfg.NamespaceSelector,
 					ObjectSelector:          webhookCfg.ObjectSelector,
 					TimeoutSeconds:          &fail.maxWebhookTimeout,
@@ -707,7 +712,7 @@ func (c *controller) buildDefaultResourceValidatingWebhookConfiguration(caBundle
 				}},
 				FailurePolicy:           &ignore,
 				SideEffects:             sideEffects,
-				AdmissionReviewVersions: []string{"v1"},
+				AdmissionReviewVersions: []string{"v1beta1"},
 				TimeoutSeconds:          &c.defaultTimeout,
 			}},
 		},
@@ -757,12 +762,14 @@ func (c *controller) buildResourceValidatingWebhookConfiguration(caBundle []byte
 			result.Webhooks = append(
 				result.Webhooks,
 				admissionregistrationv1.ValidatingWebhook{
-					Name:                    config.ValidatingWebhookName + "-ignore",
-					ClientConfig:            c.clientConfig(caBundle, config.ValidatingWebhookServicePath+"/ignore"),
-					Rules:                   ignore.buildRulesWithOperations(admissionregistrationv1.Create, admissionregistrationv1.Update, admissionregistrationv1.Delete, admissionregistrationv1.Connect),
+					Name:         config.ValidatingWebhookName + "-ignore",
+					ClientConfig: c.clientConfig(caBundle, config.ValidatingWebhookServicePath+"/ignore"),
+					Rules: []admissionregistrationv1.RuleWithOperations{
+						ignore.buildRuleWithOperations(admissionregistrationv1.Create, admissionregistrationv1.Update, admissionregistrationv1.Delete, admissionregistrationv1.Connect),
+					},
 					FailurePolicy:           &ignore.failurePolicy,
 					SideEffects:             sideEffects,
-					AdmissionReviewVersions: []string{"v1"},
+					AdmissionReviewVersions: []string{"v1beta1"},
 					NamespaceSelector:       webhookCfg.NamespaceSelector,
 					ObjectSelector:          webhookCfg.ObjectSelector,
 					TimeoutSeconds:          &ignore.maxWebhookTimeout,
@@ -773,12 +780,14 @@ func (c *controller) buildResourceValidatingWebhookConfiguration(caBundle []byte
 			result.Webhooks = append(
 				result.Webhooks,
 				admissionregistrationv1.ValidatingWebhook{
-					Name:                    config.ValidatingWebhookName + "-fail",
-					ClientConfig:            c.clientConfig(caBundle, config.ValidatingWebhookServicePath+"/fail"),
-					Rules:                   fail.buildRulesWithOperations(admissionregistrationv1.Create, admissionregistrationv1.Update, admissionregistrationv1.Delete, admissionregistrationv1.Connect),
+					Name:         config.ValidatingWebhookName + "-fail",
+					ClientConfig: c.clientConfig(caBundle, config.ValidatingWebhookServicePath+"/fail"),
+					Rules: []admissionregistrationv1.RuleWithOperations{
+						fail.buildRuleWithOperations(admissionregistrationv1.Create, admissionregistrationv1.Update, admissionregistrationv1.Delete, admissionregistrationv1.Connect),
+					},
 					FailurePolicy:           &fail.failurePolicy,
 					SideEffects:             sideEffects,
-					AdmissionReviewVersions: []string{"v1"},
+					AdmissionReviewVersions: []string{"v1beta1"},
 					NamespaceSelector:       webhookCfg.NamespaceSelector,
 					ObjectSelector:          webhookCfg.ObjectSelector,
 					TimeoutSeconds:          &fail.maxWebhookTimeout,
@@ -871,7 +880,20 @@ func (c *controller) mergeWebhook(dst *webhook, policy kyvernov1.PolicyInterface
 		}
 	}
 	for _, gvr := range gvrList {
-		dst.set(gvr)
+		dst.groups.Insert(gvr.Group)
+		if gvr.Version == "*" {
+			dst.versions = sets.NewString()
+			dst.versions.Insert(gvr.Version)
+		} else if !dst.versions.Has("*") {
+			dst.versions.Insert(gvr.Version)
+		}
+		dst.resources.Insert(gvr.Resource)
+	}
+	if dst.resources.Has("pods") {
+		dst.resources.Insert("pods/ephemeralcontainers")
+	}
+	if dst.resources.Has("services") {
+		dst.resources.Insert("services/status")
 	}
 	spec := policy.GetSpec()
 	if spec.WebhookTimeoutSeconds != nil {

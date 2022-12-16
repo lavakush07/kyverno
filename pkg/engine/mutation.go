@@ -19,12 +19,12 @@ import (
 // Mutate performs mutation. Overlay first and then mutation patches
 func Mutate(policyContext *PolicyContext) (resp *response.EngineResponse) {
 	startTime := time.Now()
-	policy := policyContext.policy
+	policy := policyContext.Policy
 	resp = &response.EngineResponse{
 		Policy: policy,
 	}
-	matchedResource := policyContext.newResource
-	ctx := policyContext.jsonContext
+	matchedResource := policyContext.NewResource
+	ctx := policyContext.JSONContext
 	var skippedRules []string
 
 	logger := logging.WithName("EngineMutate").WithValues("policy", policy.GetName(), "kind", matchedResource.GetKind(),
@@ -35,8 +35,8 @@ func Mutate(policyContext *PolicyContext) (resp *response.EngineResponse) {
 	startMutateResultResponse(resp, policy, matchedResource)
 	defer endMutateResultResponse(logger, resp, startTime)
 
-	policyContext.jsonContext.Checkpoint()
-	defer policyContext.jsonContext.Restore()
+	policyContext.JSONContext.Checkpoint()
+	defer policyContext.JSONContext.Restore()
 
 	var err error
 	applyRules := policy.GetSpec().GetApplyRules()
@@ -48,19 +48,19 @@ func Mutate(policyContext *PolicyContext) (resp *response.EngineResponse) {
 
 		logger := logger.WithValues("rule", rule.Name)
 		var excludeResource []string
-		if len(policyContext.excludeGroupRole) > 0 {
-			excludeResource = policyContext.excludeGroupRole
+		if len(policyContext.ExcludeGroupRole) > 0 {
+			excludeResource = policyContext.ExcludeGroupRole
 		}
 
-		if err = MatchesResourceDescription(matchedResource, rule, policyContext.admissionInfo, excludeResource, policyContext.namespaceLabels, policyContext.policy.GetNamespace()); err != nil {
+		if err = MatchesResourceDescription(matchedResource, rule, policyContext.AdmissionInfo, excludeResource, policyContext.NamespaceLabels, policyContext.Policy.GetNamespace()); err != nil {
 			logger.V(4).Info("rule not matched", "reason", err.Error())
 			skippedRules = append(skippedRules, rule.Name)
 			continue
 		}
 
 		logger.V(3).Info("processing mutate rule", "applyRules", applyRules)
-		resource, err := policyContext.jsonContext.Query("request.object")
-		policyContext.jsonContext.Reset()
+		resource, err := policyContext.JSONContext.Query("request.object")
+		policyContext.JSONContext.Reset()
 		if err == nil && resource != nil {
 			if err := ctx.AddResource(resource.(map[string]interface{})); err != nil {
 				logger.Error(err, "unable to update resource object")
@@ -80,7 +80,7 @@ func Mutate(policyContext *PolicyContext) (resp *response.EngineResponse) {
 
 		ruleCopy := rule.DeepCopy()
 		var patchedResources []unstructured.Unstructured
-		if !policyContext.admissionOperation && rule.IsMutateExisting() {
+		if !policyContext.AdmissionOperation && rule.IsMutateExisting() {
 			targets, err := loadTargets(ruleCopy.Mutation.Targets, policyContext, logger)
 			if err != nil {
 				rr := ruleResponse(rule, response.Mutation, err.Error(), response.RuleStatusError, nil)
@@ -97,9 +97,9 @@ func Mutate(policyContext *PolicyContext) (resp *response.EngineResponse) {
 				continue
 			}
 
-			if !policyContext.admissionOperation && rule.IsMutateExisting() {
+			if !policyContext.AdmissionOperation && rule.IsMutateExisting() {
 				policyContext := policyContext.Copy()
-				if err := policyContext.jsonContext.AddTargetResource(patchedResource.Object); err != nil {
+				if err := policyContext.JSONContext.AddTargetResource(patchedResource.Object); err != nil {
 					logging.Error(err, "failed to add target resource to the context")
 					continue
 				}
@@ -153,7 +153,7 @@ func mutateResource(rule *kyvernov1.Rule, ctx *PolicyContext, resource unstructu
 		return ruleResponse(*rule, response.Mutation, "preconditions not met", response.RuleStatusSkip, &resource), resource
 	}
 
-	mutateResp := mutate.Mutate(rule, ctx.jsonContext, resource, logger)
+	mutateResp := mutate.Mutate(rule, ctx.JSONContext, resource, logger)
 	ruleResp := buildRuleResponse(rule, mutateResp, &mutateResp.PatchedResource)
 	return ruleResp, mutateResp.PatchedResource
 }
@@ -183,7 +183,7 @@ func mutateForEach(rule *kyvernov1.Rule, ctx *PolicyContext, resource unstructur
 			return ruleResponse(*rule, response.Mutation, "preconditions not met", response.RuleStatusSkip, &patchedResource), resource
 		}
 
-		elements, err := evaluateList(foreach.List, ctx.jsonContext)
+		elements, err := evaluateList(foreach.List, ctx.JSONContext)
 		if err != nil {
 			msg := fmt.Sprintf("failed to evaluate list %s", foreach.List)
 			return ruleError(rule, response.Mutation, msg, err), resource
@@ -214,8 +214,8 @@ func mutateForEach(rule *kyvernov1.Rule, ctx *PolicyContext, resource unstructur
 }
 
 func mutateElements(name string, foreach kyvernov1.ForEachMutation, ctx *PolicyContext, elements []interface{}, resource unstructured.Unstructured, logger logr.Logger) *mutate.Response {
-	ctx.jsonContext.Checkpoint()
-	defer ctx.jsonContext.Restore()
+	ctx.JSONContext.Checkpoint()
+	defer ctx.JSONContext.Restore()
 
 	patchedResource := resource
 	var allPatches [][]byte
@@ -224,10 +224,7 @@ func mutateElements(name string, foreach kyvernov1.ForEachMutation, ctx *PolicyC
 	}
 
 	for i, e := range elements {
-		if e == nil {
-			continue
-		}
-		ctx.jsonContext.Reset()
+		ctx.JSONContext.Reset()
 		ctx := ctx.Copy()
 		store.SetForeachElement(i)
 		falseVar := false
@@ -249,7 +246,7 @@ func mutateElements(name string, foreach kyvernov1.ForEachMutation, ctx *PolicyC
 			continue
 		}
 
-		mutateResp := mutate.ForEach(name, foreach, ctx.jsonContext, patchedResource, logger)
+		mutateResp := mutate.ForEach(name, foreach, ctx.JSONContext, patchedResource, logger)
 		if mutateResp.Status == response.RuleStatusFail || mutateResp.Status == response.RuleStatusError {
 			return mutateResp
 		}

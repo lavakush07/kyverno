@@ -1,7 +1,6 @@
 package resource
 
 import (
-	"context"
 	"fmt"
 	"time"
 
@@ -25,11 +24,10 @@ func (h *handlers) createUpdateRequests(logger logr.Logger, request *admissionv1
 
 func (h *handlers) handleMutateExisting(logger logr.Logger, request *admissionv1.AdmissionRequest, policies []kyvernov1.PolicyInterface, policyContext *engine.PolicyContext, admissionRequestTimestamp time.Time) {
 	if request.Operation == admissionv1.Delete {
-		policyContext = policyContext.WithNewResource(policyContext.OldResource())
+		policyContext.NewResource = policyContext.OldResource
 	}
 
-	resource := policyContext.NewResource()
-	if request.Operation == admissionv1.Update && resource.GetDeletionTimestamp() != nil {
+	if request.Operation == admissionv1.Update && policyContext.NewResource.GetDeletionTimestamp() != nil {
 		logger.V(4).Info("skip creating UR for the trigger resource that is in termination")
 		return
 	}
@@ -42,7 +40,7 @@ func (h *handlers) handleMutateExisting(logger logr.Logger, request *admissionv1
 		logger.V(4).Info("update request for mutateExisting policy")
 
 		var rules []response.RuleResponse
-		policyContext := policyContext.WithPolicy(policy)
+		policyContext.Policy = policy
 		engineResponse := engine.ApplyBackgroundChecks(policyContext)
 
 		for _, rule := range engineResponse.PolicyResponse.Rules {
@@ -57,16 +55,15 @@ func (h *handlers) handleMutateExisting(logger logr.Logger, request *admissionv1
 		}
 
 		// registering the kyverno_policy_results_total metric concurrently
-		go webhookutils.RegisterPolicyResultsMetricMutation(context.TODO(), logger, h.metricsConfig, string(request.Operation), policy, *engineResponse)
+		go webhookutils.RegisterPolicyResultsMetricMutation(logger, h.metricsConfig, string(request.Operation), policy, *engineResponse)
 		// registering the kyverno_policy_execution_duration_seconds metric concurrently
-		go webhookutils.RegisterPolicyExecutionDurationMetricMutate(context.TODO(), logger, h.metricsConfig, string(request.Operation), policy, *engineResponse)
+		go webhookutils.RegisterPolicyExecutionDurationMetricMutate(logger, h.metricsConfig, string(request.Operation), policy, *engineResponse)
 	}
 
-	if failedResponse := applyUpdateRequest(request, kyvernov1beta1.Mutate, h.urGenerator, policyContext.AdmissionInfo(), request.Operation, engineResponses...); failedResponse != nil {
+	if failedResponse := applyUpdateRequest(request, kyvernov1beta1.Mutate, h.urGenerator, policyContext.AdmissionInfo, request.Operation, engineResponses...); failedResponse != nil {
 		for _, failedUR := range failedResponse {
 			err := fmt.Errorf("failed to create update request: %v", failedUR.err)
-			resource := policyContext.NewResource()
-			events := event.NewBackgroundFailedEvent(err, failedUR.ur.Policy, "", event.GeneratePolicyController, &resource)
+			events := event.NewBackgroundFailedEvent(err, failedUR.ur.Policy, "", event.GeneratePolicyController, &policyContext.NewResource)
 			h.eventGen.Add(events...)
 		}
 	}

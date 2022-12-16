@@ -24,7 +24,7 @@ import (
 
 type ImageVerificationHandler interface {
 	Handle(
-		metrics.MetricsConfigManager,
+		*metrics.MetricsConfig,
 		*admissionv1.AdmissionRequest,
 		[]kyvernov1.PolicyInterface,
 		*engine.PolicyContext,
@@ -53,7 +53,7 @@ type imageVerificationHandler struct {
 }
 
 func (h *imageVerificationHandler) Handle(
-	metricsConfig metrics.MetricsConfigManager,
+	metricsConfig *metrics.MetricsConfig,
 	request *admissionv1.AdmissionRequest,
 	policies []kyvernov1.PolicyInterface,
 	policyContext *engine.PolicyContext,
@@ -75,7 +75,7 @@ func (h *imageVerificationHandler) handleVerifyImages(logger logr.Logger, reques
 	var patches [][]byte
 	verifiedImageData := &engine.ImageVerificationMetadata{}
 	for _, p := range policies {
-		policyContext := policyContext.WithPolicy(p)
+		policyContext.Policy = p
 		resp, ivm := engine.VerifyAndPatchImages(policyContext)
 
 		engineResponses = append(engineResponses, resp)
@@ -83,7 +83,7 @@ func (h *imageVerificationHandler) handleVerifyImages(logger logr.Logger, reques
 		verifiedImageData.Merge(ivm)
 	}
 
-	failurePolicy := policies[0].GetSpec().GetFailurePolicy()
+	failurePolicy := policyContext.Policy.GetSpec().GetFailurePolicy()
 	blocked := webhookutils.BlockRequest(engineResponses, failurePolicy, logger)
 	if !isResourceDeleted(policyContext) {
 		events := webhookutils.GenerateEvents(engineResponses, blocked)
@@ -106,26 +106,23 @@ func (h *imageVerificationHandler) handleVerifyImages(logger logr.Logger, reques
 		}
 	}
 
-	go h.handleAudit(policyContext.NewResource(), request, nil, engineResponses...)
+	go h.handleAudit(policyContext.NewResource, request, nil, engineResponses...)
 
 	warnings := webhookutils.GetWarningMessages(engineResponses)
 	return true, "", jsonutils.JoinPatches(patches...), warnings
 }
 
 func hasAnnotations(context *engine.PolicyContext) bool {
-	newResource := context.NewResource()
-	annotations := newResource.GetAnnotations()
+	annotations := context.NewResource.GetAnnotations()
 	return len(annotations) != 0
 }
 
 func isResourceDeleted(policyContext *engine.PolicyContext) bool {
 	var deletionTimeStamp *metav1.Time
 	if reflect.DeepEqual(policyContext.NewResource, unstructured.Unstructured{}) {
-		resource := policyContext.NewResource()
-		deletionTimeStamp = resource.GetDeletionTimestamp()
+		deletionTimeStamp = policyContext.NewResource.GetDeletionTimestamp()
 	} else {
-		resource := policyContext.OldResource()
-		deletionTimeStamp = resource.GetDeletionTimestamp()
+		deletionTimeStamp = policyContext.OldResource.GetDeletionTimestamp()
 	}
 	return deletionTimeStamp != nil
 }

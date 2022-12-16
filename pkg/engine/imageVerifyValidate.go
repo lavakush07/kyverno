@@ -42,7 +42,7 @@ func processImageValidationRule(log logr.Logger, ctx *PolicyContext, rule *kyver
 	}
 
 	if !preconditionsPassed {
-		if ctx.policy.GetSpec().ValidationFailureAction.Audit() {
+		if ctx.Policy.GetSpec().ValidationFailureAction == kyvernov1.Audit {
 			return nil
 		}
 
@@ -51,7 +51,7 @@ func processImageValidationRule(log logr.Logger, ctx *PolicyContext, rule *kyver
 
 	for _, v := range rule.VerifyImages {
 		imageVerify := v.Convert()
-		for _, infoMap := range ctx.jsonContext.ImageInfo() {
+		for _, infoMap := range ctx.JSONContext.ImageInfo() {
 			for name, imageInfo := range infoMap {
 				image := imageInfo.String()
 				log = log.WithValues("rule", rule.Name)
@@ -80,8 +80,8 @@ func validateImage(ctx *PolicyContext, imageVerify *kyvernov1.ImageVerification,
 		return fmt.Errorf("missing digest for %s", image)
 	}
 
-	if imageVerify.Required && !reflect.DeepEqual(ctx.newResource, unstructured.Unstructured{}) {
-		verified, err := isImageVerified(ctx.newResource, image, log)
+	if imageVerify.Required && !reflect.DeepEqual(ctx.NewResource, unstructured.Unstructured{}) {
+		verified, err := isImageVerified(ctx.NewResource, image, log)
 		if err != nil {
 			return err
 		}

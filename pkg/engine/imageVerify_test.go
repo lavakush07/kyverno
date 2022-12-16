@@ -8,12 +8,11 @@ import (
 
 	"github.com/kyverno/kyverno/pkg/logging"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	kubefake "k8s.io/client-go/kubernetes/fake"
 
 	kyverno "github.com/kyverno/kyverno/api/kyverno/v1"
+	client "github.com/kyverno/kyverno/pkg/clients/dclient"
 	"github.com/kyverno/kyverno/pkg/cosign"
 	"github.com/kyverno/kyverno/pkg/engine/context"
-	"github.com/kyverno/kyverno/pkg/engine/context/resolvers"
 	"github.com/kyverno/kyverno/pkg/engine/response"
 	"github.com/kyverno/kyverno/pkg/engine/utils"
 	"gotest.tools/assert"
@@ -182,9 +181,9 @@ func buildContext(t *testing.T, policy, resource string, oldResource string) *Po
 	assert.NilError(t, err)
 
 	policyContext := &PolicyContext{
-		policy:      &cpol,
-		jsonContext: ctx,
-		newResource: *resourceUnstructured,
+		Policy:      &cpol,
+		JSONContext: ctx,
+		NewResource: *resourceUnstructured,
 	}
 
 	if oldResource != "" {
@@ -194,7 +193,7 @@ func buildContext(t *testing.T, policy, resource string, oldResource string) *Po
 		err = context.AddOldResource(ctx, []byte(oldResource))
 		assert.NilError(t, err)
 
-		policyContext.oldResource = *oldResourceUnstructured
+		policyContext.OldResource = *oldResourceUnstructured
 	}
 
 	if err := ctx.AddImageInfos(resourceUnstructured); err != nil {
@@ -419,13 +418,11 @@ func Test_ConfigMapMissingSuccess(t *testing.T) {
 func Test_ConfigMapMissingFailure(t *testing.T) {
 	ghcrImage := strings.Replace(testConfigMapMissingResource, "nginx:latest", "ghcr.io/kyverno/test-verify-image:signed", -1)
 	policyContext := buildContext(t, testConfigMapMissing, ghcrImage, "")
-	resolver, err := resolvers.NewClientBasedResolver(kubefake.NewSimpleClientset())
-	assert.NilError(t, err)
-	policyContext.informerCacheResolvers = resolver
+	policyContext.Client = client.NewEmptyFakeClient()
 	cosign.ClearMock()
-	resp, _ := VerifyAndPatchImages(policyContext)
-	assert.Equal(t, len(resp.PolicyResponse.Rules), 1)
-	assert.Equal(t, resp.PolicyResponse.Rules[0].Status, response.RuleStatusError, resp.PolicyResponse.Rules[0].Message)
+	err, _ := VerifyAndPatchImages(policyContext)
+	assert.Equal(t, len(err.PolicyResponse.Rules), 1)
+	assert.Equal(t, err.PolicyResponse.Rules[0].Status, response.RuleStatusError, err.PolicyResponse.Rules[0].Message)
 }
 
 func Test_SignatureGoodSigned(t *testing.T) {
@@ -502,7 +499,7 @@ func Test_RuleSelectorImageVerify(t *testing.T) {
 
 	policyContext := buildContext(t, testSampleSingleKeyPolicy, testSampleResource, "")
 	rule := newStaticKeyRule("match-all", "*", testOtherKey)
-	spec := policyContext.policy.GetSpec()
+	spec := policyContext.Policy.GetSpec()
 	spec.Rules = append(spec.Rules, *rule)
 
 	applyAll := kyverno.ApplyAll
@@ -641,62 +638,26 @@ func Test_NestedAttestors(t *testing.T) {
 }
 
 func Test_ExpandKeys(t *testing.T) {
-	as := expandStaticKeys(createStaticKeyAttestorSet("", true, false, false))
+	as := expandStaticKeys(createStaticKeyAttestorSet(""))
 	assert.Equal(t, 1, len(as.Entries))
 
-	as = expandStaticKeys(createStaticKeyAttestorSet(testOtherKey, true, false, false))
+	as = expandStaticKeys(createStaticKeyAttestorSet(testOtherKey))
 	assert.Equal(t, 1, len(as.Entries))
 
-	as = expandStaticKeys(createStaticKeyAttestorSet(testOtherKey+testOtherKey+testOtherKey, true, false, false))
+	as = expandStaticKeys(createStaticKeyAttestorSet(testOtherKey + testOtherKey + testOtherKey))
 	assert.Equal(t, 3, len(as.Entries))
-
-	as = expandStaticKeys(createStaticKeyAttestorSet("", false, true, false))
-	assert.Equal(t, 1, len(as.Entries))
-	assert.DeepEqual(t, &kyverno.SecretReference{Name: "testsecret", Namespace: "default"},
-		as.Entries[0].Keys.Secret)
-
-	as = expandStaticKeys(createStaticKeyAttestorSet("", false, false, true))
-	assert.Equal(t, 1, len(as.Entries))
-	assert.DeepEqual(t, "gcpkms://projects/test_project_id/locations/asia-south1/keyRings/test_key_ring_name/cryptoKeys/test_key_name/versions/1", as.Entries[0].Keys.KMS)
-
-	as = expandStaticKeys((createStaticKeyAttestorSet(testOtherKey, true, true, false)))
-	assert.Equal(t, 2, len(as.Entries))
-	assert.DeepEqual(t, testOtherKey, as.Entries[0].Keys.PublicKeys)
-	assert.DeepEqual(t, &kyverno.SecretReference{Name: "testsecret", Namespace: "default"},
-		as.Entries[1].Keys.Secret)
 }
 
-func createStaticKeyAttestorSet(s string, withPublicKey, withSecret, withKMS bool) kyverno.AttestorSet {
-	var entries []kyverno.Attestor
-	if withPublicKey {
-		attestor := kyverno.Attestor{
-			Keys: &kyverno.StaticKeyAttestor{
-				PublicKeys: s,
-			},
-		}
-		entries = append(entries, attestor)
-	}
-	if withSecret {
-		attestor := kyverno.Attestor{
-			Keys: &kyverno.StaticKeyAttestor{
-				Secret: &kyverno.SecretReference{
-					Name:      "testsecret",
-					Namespace: "default",
+func createStaticKeyAttestorSet(s string) kyverno.AttestorSet {
+	return kyverno.AttestorSet{
+		Entries: []kyverno.Attestor{
+			{
+				Keys: &kyverno.StaticKeyAttestor{
+					PublicKeys: s,
 				},
 			},
-		}
-		entries = append(entries, attestor)
+		},
 	}
-	if withKMS {
-		kmsKey := "gcpkms://projects/test_project_id/locations/asia-south1/keyRings/test_key_ring_name/cryptoKeys/test_key_name/versions/1"
-		attestor := kyverno.Attestor{
-			Keys: &kyverno.StaticKeyAttestor{
-				KMS: kmsKey,
-			},
-		}
-		entries = append(entries, attestor)
-	}
-	return kyverno.AttestorSet{Entries: entries}
 }
 
 func Test_ChangedAnnotation(t *testing.T) {

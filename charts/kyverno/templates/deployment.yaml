@@ -32,19 +32,17 @@ spec:
       {{- end }}
       {{- if or .Values.antiAffinity.enable .Values.podAffinity .Values.nodeAffinity }}
       affinity:
-        {{- if .Values.antiAffinity.enable }}
-        {{- with .Values.podAntiAffinity }}
+        {{- if and .Values.antiAffinity.enable .Values.podAntiAffinity }}
         podAntiAffinity:
-          {{- tpl (toYaml .) $ | nindent 10 }}
+          {{- toYaml .Values.podAntiAffinity | nindent 10 }}
         {{- end }}
-        {{- end }}
-        {{- with .Values.podAffinity }}
+        {{- if .Values.podAffinity }}
         podAffinity:
-          {{- tpl (toYaml .) $ | nindent 10 }}
+          {{- toYaml .Values.podAffinity | nindent 10 }}
         {{- end }}
-        {{- with .Values.nodeAffinity }}
+        {{- if .Values.nodeAffinity }}
         nodeAffinity:
-          {{- tpl (toYaml .) $ | nindent 10 }}
+          {{- toYaml .Values.nodeAffinity | nindent 10 }}
         {{- end }}
       {{- end }}
       {{- with .Values.nodeSelector }}

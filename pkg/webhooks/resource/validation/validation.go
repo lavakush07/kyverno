@@ -27,7 +27,7 @@ type ValidationHandler interface {
 	// HandleValidation handles validating webhook admission request
 	// If there are no errors in validating rule we apply generation rules
 	// patchedResource is the (resource + patches) after applying mutation rules
-	HandleValidation(metrics.MetricsConfigManager, *admissionv1.AdmissionRequest, []kyvernov1.PolicyInterface, *engine.PolicyContext, map[string]string, time.Time) (bool, string, []string)
+	HandleValidation(*metrics.MetricsConfig, *admissionv1.AdmissionRequest, []kyvernov1.PolicyInterface, *engine.PolicyContext, map[string]string, time.Time) (bool, string, []string)
 }
 
 func NewValidationHandler(
@@ -58,7 +58,7 @@ type validationHandler struct {
 }
 
 func (v *validationHandler) HandleValidation(
-	metricsConfig metrics.MetricsConfigManager,
+	metricsConfig *metrics.MetricsConfig,
 	request *admissionv1.AdmissionRequest,
 	policies []kyvernov1.PolicyInterface,
 	policyContext *engine.PolicyContext,
@@ -67,7 +67,7 @@ func (v *validationHandler) HandleValidation(
 ) (bool, string, []string) {
 	if len(policies) == 0 {
 		// invoke handleAudit as we may have some policies in audit mode to consider
-		go v.handleAudit(policyContext.NewResource(), request, namespaceLabels)
+		go v.handleAudit(policyContext.NewResource, request, namespaceLabels)
 		return true, "", nil
 	}
 
@@ -76,11 +76,9 @@ func (v *validationHandler) HandleValidation(
 
 	var deletionTimeStamp *metav1.Time
 	if reflect.DeepEqual(policyContext.NewResource, unstructured.Unstructured{}) {
-		resource := policyContext.NewResource()
-		deletionTimeStamp = resource.GetDeletionTimestamp()
+		deletionTimeStamp = policyContext.NewResource.GetDeletionTimestamp()
 	} else {
-		resource := policyContext.OldResource()
-		deletionTimeStamp = resource.GetDeletionTimestamp()
+		deletionTimeStamp = policyContext.OldResource.GetDeletionTimestamp()
 	}
 
 	if deletionTimeStamp != nil && request.Operation == admissionv1.Update {
@@ -90,7 +88,8 @@ func (v *validationHandler) HandleValidation(
 	var engineResponses []*response.EngineResponse
 	failurePolicy := kyvernov1.Ignore
 	for _, policy := range policies {
-		policyContext := policyContext.WithPolicy(policy).WithNamespaceLabels(namespaceLabels)
+		policyContext.Policy = policy
+		policyContext.NamespaceLabels = namespaceLabels
 		if policy.GetSpec().GetFailurePolicy() == kyvernov1.Fail {
 			failurePolicy = kyvernov1.Fail
 		}
@@ -102,8 +101,8 @@ func (v *validationHandler) HandleValidation(
 			continue
 		}
 
-		go webhookutils.RegisterPolicyResultsMetricValidation(context.TODO(), logger, metricsConfig, string(request.Operation), policyContext.Policy(), *engineResponse)
-		go webhookutils.RegisterPolicyExecutionDurationMetricValidate(context.TODO(), logger, metricsConfig, string(request.Operation), policyContext.Policy(), *engineResponse)
+		go webhookutils.RegisterPolicyResultsMetricValidation(logger, metricsConfig, string(request.Operation), policyContext.Policy, *engineResponse)
+		go webhookutils.RegisterPolicyExecutionDurationMetricValidate(logger, metricsConfig, string(request.Operation), policyContext.Policy, *engineResponse)
 
 		engineResponses = append(engineResponses, engineResponse)
 		if !engineResponse.IsSuccessful() {
@@ -127,7 +126,7 @@ func (v *validationHandler) HandleValidation(
 		return false, webhookutils.GetBlockedMessages(engineResponses), nil
 	}
 
-	go v.handleAudit(policyContext.NewResource(), request, namespaceLabels, engineResponses...)
+	go v.handleAudit(policyContext.NewResource, request, namespaceLabels, engineResponses...)
 
 	warnings := webhookutils.GetWarningMessages(engineResponses)
 	return true, "", warnings
@@ -135,13 +134,14 @@ func (v *validationHandler) HandleValidation(
 
 func (v *validationHandler) buildAuditResponses(resource unstructured.Unstructured, request *admissionv1.AdmissionRequest, namespaceLabels map[string]string) ([]*response.EngineResponse, error) {
 	policies := v.pCache.GetPolicies(policycache.ValidateAudit, request.Kind.Kind, request.Namespace)
-	policyContext, err := v.pcBuilder.Build(request)
+	policyContext, err := v.pcBuilder.Build(request, policies...)
 	if err != nil {
 		return nil, err
 	}
 	var responses []*response.EngineResponse
 	for _, policy := range policies {
-		policyContext := policyContext.WithPolicy(policy).WithNamespaceLabels(namespaceLabels)
+		policyContext.Policy = policy
+		policyContext.NamespaceLabels = namespaceLabels
 		responses = append(responses, engine.Validate(policyContext))
 	}
 	return responses, nil

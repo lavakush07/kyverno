@@ -19,7 +19,6 @@ import (
 	"github.com/kyverno/kyverno/pkg/utils"
 	wildcard "github.com/kyverno/kyverno/pkg/utils/wildcard"
 	"github.com/pkg/errors"
-	"golang.org/x/exp/slices"
 	"golang.org/x/text/cases"
 	"golang.org/x/text/language"
 	authenticationv1 "k8s.io/api/authentication/v1"
@@ -271,7 +270,7 @@ func matchSubjects(ruleSubjects []rbacv1.Subject, userInfo authenticationv1.User
 					return true
 				}
 			case "User", "Group":
-				if slices.Contains(userGroups, subject.Name) {
+				if utils.ContainsString(userGroups, subject.Name) {
 					return true
 				}
 			}
@@ -426,7 +425,7 @@ func ManagedPodResource(policy kyvernov1.PolicyInterface, resource unstructured.
 }
 
 func checkPreconditions(logger logr.Logger, ctx *PolicyContext, anyAllConditions apiextensions.JSON) (bool, error) {
-	preconditions, err := variables.SubstituteAllInPreconditions(logger, ctx.jsonContext, anyAllConditions)
+	preconditions, err := variables.SubstituteAllInPreconditions(logger, ctx.JSONContext, anyAllConditions)
 	if err != nil {
 		return false, errors.Wrapf(err, "failed to substitute variables in preconditions")
 	}
@@ -436,7 +435,7 @@ func checkPreconditions(logger logr.Logger, ctx *PolicyContext, anyAllConditions
 		return false, errors.Wrapf(err, "failed to parse preconditions")
 	}
 
-	pass := variables.EvaluateConditions(logger, ctx.jsonContext, typeConditions)
+	pass := variables.EvaluateConditions(logger, ctx.JSONContext, typeConditions)
 	return pass, nil
 }
 

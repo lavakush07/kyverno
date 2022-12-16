@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	v1beta1 "github.com/kyverno/kyverno/api/kyverno/v1beta1"
+	"github.com/kyverno/kyverno/pkg/toggle"
 	yamlutils "github.com/kyverno/kyverno/pkg/utils/yaml"
 	"gotest.tools/assert"
 )
@@ -94,96 +95,21 @@ func Test_NamespaceSelector(t *testing.T) {
 			},
 		},
 	}
+
 	rc := &ResultCounts{}
 	for _, tc := range testcases {
 		policyArray, _ := yamlutils.GetPolicy(tc.policy)
 		resourceArray, _ := GetResource(tc.resource)
-		applyPolicyConfig := ApplyPolicyConfig{
-			Policy:               policyArray[0],
-			Resource:             resourceArray[0],
-			MutateLogPath:        "",
-			UserInfo:             v1beta1.RequestInfo{},
-			NamespaceSelectorMap: tc.namespaceSelectorMap,
-			Rc:                   rc,
-		}
-		ApplyPolicyOnResource(applyPolicyConfig)
+		ApplyPolicyOnResource(policyArray[0], resourceArray[0], "", false, nil, v1beta1.RequestInfo{}, false, tc.namespaceSelectorMap, false, rc, false, nil)
 		assert.Equal(t, int64(rc.Pass), int64(tc.result.Pass))
 		assert.Equal(t, int64(rc.Fail), int64(tc.result.Fail))
 		// TODO: autogen rules seem to not be present when autogen internals is disabled
-		assert.Equal(t, int64(rc.Skip), int64(tc.result.Skip))
+		if toggle.AutogenInternals.Enabled() {
+			assert.Equal(t, int64(rc.Skip), int64(tc.result.Skip))
+		} else {
+			assert.Equal(t, int64(rc.Skip), int64(0))
+		}
 		assert.Equal(t, int64(rc.Warn), int64(tc.result.Warn))
 		assert.Equal(t, int64(rc.Error), int64(tc.result.Error))
-	}
-}
-
-func Test_IsGitSourcePath(t *testing.T) {
-	type TestCase struct {
-		path    []string
-		actual  bool
-		desired bool
-	}
-	testcases := []TestCase{
-		{
-			path:    []string{"https://github.com/kyverno/policies/openshift/team-validate-ns-name/"},
-			desired: true,
-		},
-		{
-			path:    []string{"/kyverno/policies/openshift/team-validate-ns-name/"},
-			desired: false,
-		},
-		{
-			path:    []string{"https://bitbucket.org/kyverno/policies/openshift/team-validate-ns-name"},
-			desired: true,
-		},
-		{
-			path:    []string{"https://anydomain.com/kyverno/policies/openshift/team-validate-ns-name"},
-			desired: true,
-		},
-	}
-	for _, tc := range testcases {
-		tc.actual = IsGitSourcePath(tc.path)
-		if tc.actual != tc.desired {
-			t.Errorf("%s is not a git URL", tc.path)
-		}
-	}
-}
-
-func Test_GetGitBranchOrPolicyPaths(t *testing.T) {
-	type TestCase struct {
-		gitBranch                             string
-		repoURL                               string
-		policyPath                            []string
-		desiredBranch, actualBranch           string
-		desiredPathToYAMLs, actualPathToYAMLs string
-	}
-	testcases := []TestCase{
-		{
-			gitBranch:          "main",
-			repoURL:            "https://github.com/kyverno/policies",
-			policyPath:         []string{"https://github.com/kyverno/policies/openshift/team-validate-ns-name/"},
-			desiredBranch:      "main",
-			desiredPathToYAMLs: "/openshift/team-validate-ns-name/",
-		},
-		{
-			gitBranch:          "",
-			repoURL:            "https://github.com/kyverno/policies",
-			policyPath:         []string{"https://github.com/kyverno/policies/"},
-			desiredBranch:      "main",
-			desiredPathToYAMLs: "/",
-		},
-		{
-			gitBranch:          "",
-			repoURL:            "https://github.com/kyverno/policies",
-			policyPath:         []string{"https://github.com/kyverno/policies"},
-			desiredBranch:      "main",
-			desiredPathToYAMLs: "/",
-		},
-	}
-
-	for _, tc := range testcases {
-		tc.actualBranch, tc.actualPathToYAMLs = GetGitBranchOrPolicyPaths(tc.gitBranch, tc.repoURL, tc.policyPath)
-		if tc.actualBranch != tc.desiredBranch || tc.actualPathToYAMLs != tc.desiredPathToYAMLs {
-			t.Errorf("Want %q got %q  OR Want %q got %q", tc.desiredBranch, tc.actualBranch, tc.desiredPathToYAMLs, tc.actualPathToYAMLs)
-		}
 	}
 }
