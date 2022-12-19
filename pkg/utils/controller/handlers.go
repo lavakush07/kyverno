@@ -12,15 +12,14 @@ import (
 )
 
 type (
-	addFunc             = addFuncT[interface{}]
-	updateFunc          = updateFuncT[interface{}]
-	deleteFunc          = deleteFuncT[interface{}]
+	addFunc             func(interface{})
+	updateFunc          func(interface{}, interface{})
+	deleteFunc          func(interface{})
 	addFuncT[T any]     func(T)
 	updateFuncT[T any]  func(T, T)
 	deleteFuncT[T any]  func(T)
-	keyFunc             = keyFuncT[interface{}, interface{}]
-	keyFuncT[T, U any]  func(T) (U, error)
-	EnqueueFunc         = EnqueueFuncT[interface{}]
+	keyFunc             func(interface{}) (interface{}, error)
+	EnqueueFunc         func(interface{}) error
 	EnqueueFuncT[T any] func(T) error
 )
 
@@ -49,12 +48,6 @@ func AddKeyedEventHandlers(logger logr.Logger, informer cache.SharedInformer, qu
 	return enqueueFunc
 }
 
-func AddKeyedEventHandlersT[K metav1.Object](logger logr.Logger, informer cache.SharedInformer, queue workqueue.RateLimitingInterface, parseKey keyFuncT[K, interface{}]) EnqueueFuncT[K] {
-	enqueueFunc := LogError(logger, Parse(parseKey, Queue(queue)))
-	AddEventHandlersT(informer, AddFuncT(logger, enqueueFunc), UpdateFuncT(logger, enqueueFunc), DeleteFuncT(logger, enqueueFunc))
-	return enqueueFunc
-}
-
 func AddDelayedKeyedEventHandlers(logger logr.Logger, informer cache.SharedInformer, queue workqueue.RateLimitingInterface, delay time.Duration, parseKey keyFunc) EnqueueFunc {
 	enqueueFunc := LogError(logger, Parse(parseKey, QueueAfter(queue, delay)))
 	AddEventHandlers(informer, AddFunc(logger, enqueueFunc), UpdateFunc(logger, enqueueFunc), DeleteFunc(logger, enqueueFunc))
@@ -63,10 +56,6 @@ func AddDelayedKeyedEventHandlers(logger logr.Logger, informer cache.SharedInfor
 
 func AddDefaultEventHandlers(logger logr.Logger, informer cache.SharedInformer, queue workqueue.RateLimitingInterface) EnqueueFunc {
 	return AddKeyedEventHandlers(logger, informer, queue, MetaNamespaceKey)
-}
-
-func AddDefaultEventHandlersT[K metav1.Object](logger logr.Logger, informer cache.SharedInformer, queue workqueue.RateLimitingInterface) EnqueueFuncT[K] {
-	return AddKeyedEventHandlersT(logger, informer, queue, MetaNamespaceKeyT[K])
 }
 
 func AddDelayedDefaultEventHandlers(logger logr.Logger, informer cache.SharedInformer, queue workqueue.RateLimitingInterface, delay time.Duration) EnqueueFunc {
@@ -81,8 +70,8 @@ func AddDelayedExplicitEventHandlers[K any](logger logr.Logger, informer cache.S
 	return AddDelayedKeyedEventHandlers(logger, informer, queue, delay, ExplicitKey(parseKey))
 }
 
-func LogError[K any](logger logr.Logger, inner EnqueueFuncT[K]) EnqueueFuncT[K] {
-	return func(obj K) error {
+func LogError(logger logr.Logger, inner EnqueueFunc) EnqueueFunc {
+	return func(obj interface{}) error {
 		err := inner(obj)
 		if err != nil {
 			logger.Error(err, "failed to compute key name", "obj", obj)
@@ -91,8 +80,8 @@ func LogError[K any](logger logr.Logger, inner EnqueueFuncT[K]) EnqueueFuncT[K] 
 	}
 }
 
-func Parse[K, L any](parseKey keyFuncT[K, L], inner EnqueueFuncT[L]) EnqueueFuncT[K] {
-	return func(obj K) error {
+func Parse(parseKey keyFunc, inner EnqueueFunc) EnqueueFunc {
+	return func(obj interface{}) error {
 		if key, err := parseKey(obj); err != nil {
 			return err
 		} else {
@@ -117,10 +106,6 @@ func QueueAfter(queue workqueue.RateLimitingInterface, delay time.Duration) Enqu
 
 func MetaNamespaceKey(obj interface{}) (interface{}, error) {
 	return cache.MetaNamespaceKeyFunc(obj)
-}
-
-func MetaNamespaceKeyT[T any](obj T) (interface{}, error) {
-	return MetaNamespaceKey(obj)
 }
 
 func ExplicitKey[K any](parseKey func(K) cache.ExplicitKey) keyFunc {
@@ -158,32 +143,6 @@ func UpdateFunc(logger logr.Logger, enqueue EnqueueFunc) updateFunc {
 
 func DeleteFunc(logger logr.Logger, enqueue EnqueueFunc) deleteFunc {
 	return func(obj interface{}) {
-		if err := enqueue(obj); err != nil {
-			logger.Error(err, "failed to enqueue object", "obj", obj)
-		}
-	}
-}
-
-func AddFuncT[K metav1.Object](logger logr.Logger, enqueue EnqueueFuncT[K]) addFuncT[K] {
-	return func(obj K) {
-		if err := enqueue(obj); err != nil {
-			logger.Error(err, "failed to enqueue object", "obj", obj)
-		}
-	}
-}
-
-func UpdateFuncT[K metav1.Object](logger logr.Logger, enqueue EnqueueFuncT[K]) updateFuncT[K] {
-	return func(old, obj K) {
-		if old.GetResourceVersion() != obj.GetResourceVersion() {
-			if err := enqueue(obj); err != nil {
-				logger.Error(err, "failed to enqueue object", "obj", obj)
-			}
-		}
-	}
-}
-
-func DeleteFuncT[K metav1.Object](logger logr.Logger, enqueue EnqueueFuncT[K]) deleteFuncT[K] {
-	return func(obj K) {
 		if err := enqueue(obj); err != nil {
 			logger.Error(err, "failed to enqueue object", "obj", obj)
 		}

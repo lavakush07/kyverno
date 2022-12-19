@@ -11,7 +11,6 @@ import (
 	"github.com/kyverno/kyverno/pkg/config"
 	"github.com/kyverno/kyverno/pkg/engine"
 	"github.com/kyverno/kyverno/pkg/engine/context"
-	"github.com/kyverno/kyverno/pkg/engine/context/resolvers"
 	utils "github.com/kyverno/kyverno/pkg/utils"
 	"github.com/pkg/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -21,7 +20,6 @@ func NewBackgroundContext(dclient dclient.Interface, ur *kyvernov1beta1.UpdateRe
 	policy kyvernov1.PolicyInterface,
 	trigger *unstructured.Unstructured,
 	cfg config.Configuration,
-	informerCacheResolvers resolvers.ConfigmapResolver,
 	namespaceLabels map[string]string,
 	logger logr.Logger,
 ) (*engine.PolicyContext, bool, error) {
@@ -79,15 +77,18 @@ func NewBackgroundContext(dclient dclient.Interface, ur *kyvernov1beta1.UpdateRe
 		logger.Error(err, "unable to add image info to variables context")
 	}
 
-	policyContext := engine.NewPolicyContextWithJsonContext(ctx).
-		WithPolicy(policy).
-		WithNewResource(*trigger).
-		WithOldResource(old).
-		WithAdmissionInfo(ur.Spec.Context.UserRequestInfo).
-		WithConfiguration(cfg).
-		WithNamespaceLabels(namespaceLabels).
-		WithClient(dclient).
-		WithInformerCacheResolver(informerCacheResolvers)
+	policyContext := &engine.PolicyContext{
+		NewResource:         *trigger,
+		OldResource:         old,
+		Policy:              policy,
+		AdmissionInfo:       ur.Spec.Context.UserRequestInfo,
+		ExcludeGroupRole:    cfg.GetExcludeGroupRole(),
+		ExcludeResourceFunc: cfg.ToFilter,
+		JSONContext:         ctx,
+		NamespaceLabels:     namespaceLabels,
+		Client:              dclient,
+		AdmissionOperation:  false,
+	}
 
 	return policyContext, false, nil
 }

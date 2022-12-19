@@ -1667,8 +1667,7 @@ func testMatchPattern(t *testing.T, testCase struct {
 	pattern  []byte
 	resource []byte
 	status   response.RuleStatus
-},
-) {
+}) {
 	var pattern, resource interface{}
 	err := json.Unmarshal(testCase.pattern, &pattern)
 	assert.NilError(t, err)
@@ -1689,5 +1688,6 @@ func testMatchPattern(t *testing.T, testCase struct {
 		assert.Assert(t, pe.Skip, fmt.Sprintf("\nexpected skip == true - test: %s\npattern: %s\nresource: %s\n", testCase.name, pattern, resource))
 	} else if testCase.status == response.RuleStatusError {
 		assert.Assert(t, err == nil, fmt.Sprintf("\nexpected error - test: %s\npattern: %s\nresource: %s\n", testCase.name, pattern, resource))
+
 	}
 }

@@ -1,16 +1,16 @@
 package policyexecutionduration
 
 import (
-	"context"
+	"fmt"
 
 	kyvernov1 "github.com/kyverno/kyverno/api/kyverno/v1"
 	"github.com/kyverno/kyverno/pkg/engine/response"
 	"github.com/kyverno/kyverno/pkg/metrics"
+	"github.com/kyverno/kyverno/pkg/utils"
 )
 
 func registerPolicyExecutionDurationMetric(
-	ctx context.Context,
-	m metrics.MetricsConfigManager,
+	m *metrics.MetricsConfig,
 	policyValidationMode metrics.PolicyValidationMode,
 	policyType metrics.PolicyType,
 	policyBackgroundMode metrics.PolicyBackgroundMode,
@@ -21,18 +21,29 @@ func registerPolicyExecutionDurationMetric(
 	ruleType metrics.RuleType,
 	ruleExecutionCause metrics.RuleExecutionCause,
 	ruleExecutionLatency float64,
-) {
+) error {
 	if policyType == metrics.Cluster {
 		policyNamespace = "-"
 	}
-	if m.Config().CheckNamespace(policyNamespace) {
-		m.RecordPolicyExecutionDuration(ctx, policyValidationMode, policyType, policyBackgroundMode, policyNamespace, policyName, ruleName, ruleResult, ruleType, ruleExecutionCause, ruleExecutionLatency)
+
+	includeNamespaces, excludeNamespaces := m.Config.GetIncludeNamespaces(), m.Config.GetExcludeNamespaces()
+	if (resourceNamespace != "" && resourceNamespace != "-") && utils.ContainsString(excludeNamespaces, resourceNamespace) {
+		m.Log.V(2).Info(fmt.Sprintf("Skipping the registration of kyverno_policy_execution_duration_seconds metric as the operation belongs to the namespace '%s' which is one of 'namespaces.exclude' %+v in values.yaml", resourceNamespace, excludeNamespaces))
+		return nil
 	}
+	if (resourceNamespace != "" && resourceNamespace != "-") && len(includeNamespaces) > 0 && !utils.ContainsString(includeNamespaces, resourceNamespace) {
+		m.Log.V(2).Info(fmt.Sprintf("Skipping the registration of kyverno_policy_execution_duration_seconds metric as the operation belongs to the namespace '%s' which is not one of 'namespaces.include' %+v in values.yaml", resourceNamespace, includeNamespaces))
+		return nil
+	}
+
+	m.RecordPolicyExecutionDuration(policyValidationMode, policyType, policyBackgroundMode, policyNamespace, policyName, ruleName, ruleResult, ruleType, ruleExecutionCause, ruleExecutionLatency)
+
+	return nil
 }
 
 // policy - policy related data
 // engineResponse - resource and rule related data
-func ProcessEngineResponse(ctx context.Context, m metrics.MetricsConfigManager, policy kyvernov1.PolicyInterface, engineResponse response.EngineResponse, executionCause metrics.RuleExecutionCause, resourceRequestOperation metrics.ResourceRequestOperation) error {
+func ProcessEngineResponse(m *metrics.MetricsConfig, policy kyvernov1.PolicyInterface, engineResponse response.EngineResponse, executionCause metrics.RuleExecutionCause, resourceRequestOperation metrics.ResourceRequestOperation) error {
 	name, namespace, policyType, backgroundMode, validationMode, err := metrics.GetPolicyInfos(policy)
 	if err != nil {
 		return err
@@ -59,8 +70,7 @@ func ProcessEngineResponse(ctx context.Context, m metrics.MetricsConfigManager, 
 			ruleResult = metrics.Fail
 		}
 		ruleExecutionLatencyInSeconds := float64(rule.RuleStats.ProcessingTime) / float64(1000*1000*1000)
-		registerPolicyExecutionDurationMetric(
-			ctx,
+		if err := registerPolicyExecutionDurationMetric(
 			m,
 			validationMode,
 			policyType,
@@ -72,7 +82,9 @@ func ProcessEngineResponse(ctx context.Context, m metrics.MetricsConfigManager, 
 			ruleType,
 			executionCause,
 			ruleExecutionLatencyInSeconds,
-		)
+		); err != nil {
+			return err
+		}
 	}
 	return nil
 }

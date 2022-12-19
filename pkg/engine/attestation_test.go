@@ -227,6 +227,7 @@ var scanPredicate = `
 `
 
 func Test_Conditions(t *testing.T) {
+
 	conditions := []v1.AnyAllConditions{
 		{
 			AnyConditions: []v1.Condition{

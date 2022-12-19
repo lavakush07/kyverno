@@ -106,7 +106,7 @@ func generateRule(name string, rule *kyvernov1.Rule, tplKey, shift string, kinds
 		return rule
 	}
 	if len(rule.Mutation.ForEachMutation) > 0 && rule.Mutation.ForEachMutation != nil {
-		var newForEachMutation []kyvernov1.ForEachMutation
+		var newForeachMutation []kyvernov1.ForEachMutation
 		for _, foreach := range rule.Mutation.ForEachMutation {
 			temp := kyvernov1.ForEachMutation{
 				List:             foreach.List,
@@ -120,10 +120,10 @@ func generateRule(name string, rule *kyvernov1.Rule, tplKey, shift string, kinds
 					},
 				},
 			)
-			newForEachMutation = append(newForEachMutation, temp)
+			newForeachMutation = append(newForeachMutation, temp)
 		}
 		rule.Mutation = kyvernov1.Mutation{
-			ForEachMutation: newForEachMutation,
+			ForEachMutation: newForeachMutation,
 		}
 		return rule
 	}
@@ -227,10 +227,10 @@ func getAnyAllAutogenRule(v kyvernov1.ResourceFilters, match string, kinds []str
 
 func generateRuleForControllers(rule *kyvernov1.Rule, controllers string) *kyvernov1.Rule {
 	if isAutogenRuleName(rule.Name) || controllers == "" {
-		debug.Info("skip generateRuleForControllers")
+		logger.V(5).Info("skip generateRuleForControllers")
 		return nil
 	}
-	debug.Info("processing rule", "rulename", rule.Name)
+	logger.V(3).Info("processing rule", "rulename", rule.Name)
 	match, exclude := rule.MatchResources, rule.ExcludeResources
 	matchKinds, excludeKinds := match.GetKinds(), exclude.GetKinds()
 	if !kubeutils.ContainsKind(matchKinds, "Pod") || (len(excludeKinds) != 0 && !kubeutils.ContainsKind(excludeKinds, "Pod")) {
@@ -242,14 +242,7 @@ func generateRuleForControllers(rule *kyvernov1.Rule, controllers string) *kyver
 	if controllers == "all" {
 		skipAutoGeneration = true
 	} else if controllers != "none" && controllers != "all" {
-		controllersList := map[string]int{
-			"DaemonSet":             1,
-			"Deployment":            1,
-			"Job":                   1,
-			"StatefulSet":           1,
-			"ReplicaSet":            1,
-			"ReplicationController": 1,
-		}
+		controllersList := map[string]int{"DaemonSet": 1, "Deployment": 1, "Job": 1, "StatefulSet": 1}
 		for _, value := range strings.Split(controllers, ",") {
 			if _, ok := controllersList[value]; ok {
 				controllersValidated = append(controllersValidated, value)
@@ -261,7 +254,7 @@ func generateRuleForControllers(rule *kyvernov1.Rule, controllers string) *kyver
 	}
 	if skipAutoGeneration {
 		if controllers == "all" {
-			controllers = "DaemonSet,Deployment,Job,StatefulSet,ReplicaSet,ReplicationController"
+			controllers = "DaemonSet,Deployment,Job,StatefulSet"
 		} else {
 			controllers = strings.Join(controllersValidated, ",")
 		}
@@ -283,7 +276,7 @@ func generateCronJobRule(rule *kyvernov1.Rule, controllers string) *kyvernov1.Ru
 	if !hasCronJob {
 		return nil
 	}
-	debug.Info("generating rule for cronJob")
+	logger.V(3).Info("generating rule for cronJob")
 	return generateRule(
 		getAutogenRuleName("autogen-cronjob", rule.Name),
 		generateRuleForControllers(rule, controllers),

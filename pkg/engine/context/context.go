@@ -2,7 +2,6 @@ package context
 
 import (
 	"encoding/json"
-	"fmt"
 	"strings"
 	"sync"
 
@@ -66,7 +65,7 @@ type Interface interface {
 	AddNamespace(namespace string) error
 
 	// AddElement adds element info to the context
-	AddElement(data interface{}, index, nesting int) error
+	AddElement(data interface{}, index int) error
 
 	// AddImageInfo adds image info to the context
 	AddImageInfo(info apiutils.ImageInfo) error
@@ -240,14 +239,10 @@ func (ctx *context) AddNamespace(namespace string) error {
 	return addToContext(ctx, namespace, "request", "namespace")
 }
 
-func (ctx *context) AddElement(data interface{}, index, nesting int) error {
-	nestedElement := fmt.Sprintf("element%d", nesting)
-	nestedElementIndex := fmt.Sprintf("elementIndex%d", nesting)
+func (ctx *context) AddElement(data interface{}, index int) error {
 	data = map[string]interface{}{
-		"element":          data,
-		nestedElement:      data,
-		"elementIndex":     index,
-		nestedElementIndex: index,
+		"element":      data,
+		"elementIndex": index,
 	}
 	return addToContext(ctx, data)
 }

@@ -6,96 +6,124 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
-	"github.com/kyverno/kyverno/pkg/config"
 	kconfig "github.com/kyverno/kyverno/pkg/config"
 	"github.com/kyverno/kyverno/pkg/utils/kube"
-	"github.com/kyverno/kyverno/pkg/version"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
 	"go.opentelemetry.io/otel/exporters/prometheus"
-	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/metric/global"
 	"go.opentelemetry.io/otel/metric/instrument"
+	"go.opentelemetry.io/otel/metric/instrument/asyncfloat64"
 	"go.opentelemetry.io/otel/metric/instrument/syncfloat64"
 	"go.opentelemetry.io/otel/metric/instrument/syncint64"
-	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	controller "go.opentelemetry.io/otel/sdk/metric/controller/basic"
+	"go.opentelemetry.io/otel/sdk/metric/export/aggregation"
+	processor "go.opentelemetry.io/otel/sdk/metric/processor/basic"
+	"go.opentelemetry.io/otel/sdk/metric/selector/simple"
 	"go.opentelemetry.io/otel/sdk/resource"
-	semconv "go.opentelemetry.io/otel/semconv/v1.12.0"
+	semconv "go.opentelemetry.io/otel/semconv/v1.4.0"
 	"k8s.io/client-go/kubernetes"
 )
 
 const (
-	MeterName = "kyverno"
+	meterName = "kyverno"
 )
 
 type MetricsConfig struct {
 	// instruments
 	policyChangesMetric           syncint64.Counter
 	policyResultsMetric           syncint64.Counter
+	policyRuleInfoMetric          asyncfloat64.Gauge
 	policyExecutionDurationMetric syncfloat64.Histogram
+	admissionRequestsMetric       syncint64.Counter
+	admissionReviewDurationMetric syncfloat64.Histogram
 	clientQueriesMetric           syncint64.Counter
 
 	// config
-	config kconfig.MetricsConfiguration
+	Config *kconfig.MetricsConfigData
 	Log    logr.Logger
 }
 
 type MetricsConfigManager interface {
-	Config() kconfig.MetricsConfiguration
-	RecordPolicyResults(ctx context.Context, policyValidationMode PolicyValidationMode, policyType PolicyType, policyBackgroundMode PolicyBackgroundMode, policyNamespace string, policyName string, resourceKind string, resourceNamespace string, resourceRequestOperation ResourceRequestOperation, ruleName string, ruleResult RuleResult, ruleType RuleType, ruleExecutionCause RuleExecutionCause)
-	RecordPolicyChanges(ctx context.Context, policyValidationMode PolicyValidationMode, policyType PolicyType, policyBackgroundMode PolicyBackgroundMode, policyNamespace string, policyName string, policyChangeType string)
-	RecordPolicyExecutionDuration(ctx context.Context, policyValidationMode PolicyValidationMode, policyType PolicyType, policyBackgroundMode PolicyBackgroundMode, policyNamespace string, policyName string, ruleName string, ruleResult RuleResult, ruleType RuleType, ruleExecutionCause RuleExecutionCause, ruleExecutionLatency float64)
-	RecordClientQueries(ctx context.Context, clientQueryOperation ClientQueryOperation, clientType ClientType, resourceKind string, resourceNamespace string)
+	RecordPolicyResults(policyValidationMode PolicyValidationMode, policyType PolicyType, policyBackgroundMode PolicyBackgroundMode, policyNamespace string, policyName string, resourceKind string, resourceNamespace string, resourceRequestOperation ResourceRequestOperation, ruleName string, ruleResult RuleResult, ruleType RuleType, ruleExecutionCause RuleExecutionCause)
+	RecordPolicyChanges(policyValidationMode PolicyValidationMode, policyType PolicyType, policyBackgroundMode PolicyBackgroundMode, policyNamespace string, policyName string, policyChangeType string)
+	RecordPolicyRuleInfo(policyValidationMode PolicyValidationMode, policyType PolicyType, policyBackgroundMode PolicyBackgroundMode, policyNamespace string, policyName string, ruleName string, ruleType RuleType, status string, metricValue float64)
+	RecordAdmissionRequests(resourceKind string, resourceNamespace string, resourceRequestOperation ResourceRequestOperation)
+	RecordPolicyExecutionDuration(policyValidationMode PolicyValidationMode, policyType PolicyType, policyBackgroundMode PolicyBackgroundMode, policyNamespace string, policyName string, ruleName string, ruleResult RuleResult, ruleType RuleType, ruleExecutionCause RuleExecutionCause, ruleExecutionLatency float64)
+	RecordAdmissionReviewDuration(resourceKind string, resourceNamespace string, resourceRequestOperation string, admissionRequestLatency float64)
+	RecordClientQueries(clientQueryOperation ClientQueryOperation, clientType ClientType, resourceKind string, resourceNamespace string)
 }
 
-func (m *MetricsConfig) Config() kconfig.MetricsConfiguration {
-	return m.config
-}
-
-func (m *MetricsConfig) initializeMetrics(meterProvider metric.MeterProvider) error {
+func initializeMetrics(m *MetricsConfig) (*MetricsConfig, error) {
 	var err error
-	meter := meterProvider.Meter(MeterName)
-	m.policyResultsMetric, err = meter.SyncInt64().Counter("kyverno_policy_results", instrument.WithDescription("can be used to track the results associated with the policies applied in the user’s cluster, at the level from rule to policy to admission requests"))
+	meter := global.MeterProvider().Meter(meterName)
+
+	m.policyResultsMetric, err = meter.SyncInt64().Counter("kyverno_policy_results_total", instrument.WithDescription("can be used to track the results associated with the policies applied in the user’s cluster, at the level from rule to policy to admission requests"))
 	if err != nil {
-		m.Log.Error(err, "Failed to create instrument, kyverno_policy_results")
-		return err
+		m.Log.Error(err, "Failed to create instrument, kyverno_policy_results_total")
+		return nil, err
 	}
-	m.policyChangesMetric, err = meter.SyncInt64().Counter("kyverno_policy_changes", instrument.WithDescription("can be used to track all the changes associated with the Kyverno policies present on the cluster such as creation, updates and deletions"))
+
+	m.policyChangesMetric, err = meter.SyncInt64().Counter("kyverno_policy_changes_total", instrument.WithDescription("can be used to track all the changes associated with the Kyverno policies present on the cluster such as creation, updates and deletions"))
 	if err != nil {
-		m.Log.Error(err, "Failed to create instrument, kyverno_policy_changes")
-		return err
+		m.Log.Error(err, "Failed to create instrument, kyverno_policy_changes_total")
+		return nil, err
 	}
+
+	m.admissionRequestsMetric, err = meter.SyncInt64().Counter("kyverno_admission_requests_total", instrument.WithDescription("can be used to track the number of admission requests encountered by Kyverno in the cluster"))
+	if err != nil {
+		m.Log.Error(err, "Failed to create instrument, kyverno_admission_requests_total")
+		return nil, err
+	}
+
 	m.policyExecutionDurationMetric, err = meter.SyncFloat64().Histogram("kyverno_policy_execution_duration_seconds", instrument.WithDescription("can be used to track the latencies (in seconds) associated with the execution/processing of the individual rules under Kyverno policies whenever they evaluate incoming resource requests"))
 	if err != nil {
 		m.Log.Error(err, "Failed to create instrument, kyverno_policy_execution_duration_seconds")
-		return err
+		return nil, err
 	}
-	m.clientQueriesMetric, err = meter.SyncInt64().Counter("kyverno_client_queries", instrument.WithDescription("can be used to track the number of client queries sent from Kyverno to the API-server"))
+
+	m.admissionReviewDurationMetric, err = meter.SyncFloat64().Histogram("kyverno_admission_review_duration_seconds", instrument.WithDescription("can be used to track the latencies (in seconds) associated with the entire individual admission review. For example, if an incoming request trigger, say, five policies, this metric will track the e2e latency associated with the execution of all those policies"))
 	if err != nil {
-		m.Log.Error(err, "Failed to create instrument, kyverno_client_queries")
-		return err
+		m.Log.Error(err, "Failed to create instrument, kyverno_admission_review_duration_seconds")
+		return nil, err
 	}
-	return nil
+
+	// Register Async Callbacks
+	m.policyRuleInfoMetric, err = meter.AsyncFloat64().Gauge("kyverno_policy_rule_info_total", instrument.WithDescription("can be used to track the info of the rules or/and policies present in the cluster. 0 means the rule doesn't exist and has been deleted, 1 means the rule is currently existent in the cluster"))
+	if err != nil {
+		m.Log.Error(err, "Failed to create instrument, kyverno_policy_rule_info_total")
+		return nil, err
+	}
+
+	m.clientQueriesMetric, err = meter.SyncInt64().Counter("kyverno_client_queries_total", instrument.WithDescription("can be used to track the number of client queries sent from Kyverno to the API-server"))
+	if err != nil {
+		m.Log.Error(err, "Failed to create instrument, kyverno_client_queries_total")
+		return nil, err
+	}
+
+	return m, nil
 }
 
-func ShutDownController(ctx context.Context, pusher *sdkmetric.MeterProvider) {
+func ShutDownController(ctx context.Context, pusher *controller.Controller) {
 	if pusher != nil {
 		// pushes any last exports to the receiver
-		if err := pusher.Shutdown(ctx); err != nil {
+		if err := pusher.Stop(ctx); err != nil {
 			otel.Handle(err)
 		}
 	}
 }
 
 func NewOTLPGRPCConfig(
-	ctx context.Context,
 	endpoint string,
 	certs string,
 	kubeClient kubernetes.Interface,
 	log logr.Logger,
-) (metric.MeterProvider, error) {
-	options := []otlpmetricgrpc.Option{otlpmetricgrpc.WithEndpoint(endpoint)}
+) (*controller.Controller, error) {
+	ctx := context.Background()
+	var client otlpmetric.Client
+
 	if certs != "" {
 		// here the certificates are stored as configmaps
 		transportCreds, err := kube.FetchCert(ctx, certs, kubeClient)
@@ -103,78 +131,99 @@ func NewOTLPGRPCConfig(
 			log.Error(err, "Error fetching certificate from secret")
 			return nil, err
 		}
-		options = append(options, otlpmetricgrpc.WithTLSCredentials(transportCreds))
+
+		client = otlpmetricgrpc.NewClient(
+			otlpmetricgrpc.WithEndpoint(endpoint),
+			otlpmetricgrpc.WithTLSCredentials(transportCreds),
+		)
 	} else {
-		options = append(options, otlpmetricgrpc.WithInsecure())
+		client = otlpmetricgrpc.NewClient(
+			otlpmetricgrpc.WithEndpoint(endpoint),
+			otlpmetricgrpc.WithInsecure(),
+		)
 	}
-	// create new exporter for exporting metrics
-	exporter, err := otlpmetricgrpc.New(ctx, options...)
+
+	// create New Exporter for exporting metrics
+	metricExp, err := otlpmetric.New(ctx, client)
 	if err != nil {
 		log.Error(err, "Failed to create the collector exporter")
 		return nil, err
 	}
-	res, err := resource.Merge(
-		resource.Default(),
-		resource.NewWithAttributes(
-			semconv.SchemaURL,
-			semconv.ServiceNameKey.String(MeterName),
-			semconv.ServiceVersionKey.String(version.BuildVersion),
-		),
+
+	res, err := resource.New(context.Background(),
+		resource.WithAttributes(semconv.ServiceNameKey.String("kyverno_metrics")),
+		resource.WithSchemaURL(semconv.SchemaURL),
 	)
 	if err != nil {
 		log.Error(err, "failed creating resource")
 		return nil, err
 	}
-	reader := sdkmetric.NewPeriodicReader(
-		exporter,
-		sdkmetric.WithInterval(2*time.Second),
-	)
+
 	// create controller and bind the exporter with it
-	provider := sdkmetric.NewMeterProvider(
-		sdkmetric.WithReader(reader),
-		sdkmetric.WithResource(res),
+	pusher := controller.New(
+		processor.NewFactory(
+			simple.NewWithHistogramDistribution(),
+			aggregation.CumulativeTemporalitySelector(),
+			processor.WithMemory(true),
+		),
+		controller.WithExporter(metricExp),
+		controller.WithResource(res),
+		controller.WithCollectPeriod(2*time.Second),
 	)
-	return provider, nil
+	global.SetMeterProvider(pusher)
+
+	if err := pusher.Start(ctx); err != nil {
+		log.Error(err, "could not start metric exporter")
+		return nil, err
+	}
+
+	return pusher, nil
 }
 
 func NewPrometheusConfig(
-	ctx context.Context,
 	log logr.Logger,
-) (metric.MeterProvider, *http.ServeMux, error) {
-	res, err := resource.Merge(
-		resource.Default(),
-		resource.NewWithAttributes(
-			semconv.SchemaURL,
-			semconv.ServiceNameKey.String("kyverno-svc-metrics"),
-			semconv.ServiceNamespaceKey.String(kconfig.KyvernoNamespace()),
-			semconv.ServiceVersionKey.String(version.BuildVersion),
-		),
+) (*http.ServeMux, error) {
+	config := prometheus.Config{}
+	res, err := resource.New(context.Background(),
+		resource.WithAttributes(semconv.ServiceNameKey.String("kyverno-svc-metrics")),
+		resource.WithAttributes(semconv.ServiceNamespaceKey.String(kconfig.KyvernoNamespace())),
+		resource.WithSchemaURL(semconv.SchemaURL),
 	)
 	if err != nil {
 		log.Error(err, "failed creating resource")
-		return nil, nil, err
+		return nil, err
 	}
-	exporter, err := prometheus.New(
-		prometheus.WithoutUnits(),
-		prometheus.WithoutTargetInfo(),
+
+	c := controller.New(
+		processor.NewFactory(
+			simple.NewWithHistogramDistribution(),
+			aggregation.CumulativeTemporalitySelector(),
+			processor.WithMemory(true),
+		),
+		controller.WithResource(res),
+		controller.WithCollectPeriod(10*time.Second),
 	)
+
+	exporter, err := prometheus.New(config, c)
 	if err != nil {
 		log.Error(err, "failed to initialize prometheus exporter")
-		return nil, nil, err
+		return nil, err
 	}
-	provider := sdkmetric.NewMeterProvider(
-		sdkmetric.WithReader(exporter),
-		sdkmetric.WithResource(res),
-	)
+
+	global.SetMeterProvider(exporter.MeterProvider())
+
 	metricsServerMux := http.NewServeMux()
-	metricsServerMux.Handle(config.MetricsPath, promhttp.Handler())
-	return provider, metricsServerMux, nil
+	metricsServerMux.HandleFunc("/metrics", exporter.ServeHTTP)
+
+	return metricsServerMux, nil
 }
 
-func (m *MetricsConfig) RecordPolicyResults(ctx context.Context, policyValidationMode PolicyValidationMode, policyType PolicyType, policyBackgroundMode PolicyBackgroundMode, policyNamespace string, policyName string,
+func (m *MetricsConfig) RecordPolicyResults(policyValidationMode PolicyValidationMode, policyType PolicyType, policyBackgroundMode PolicyBackgroundMode, policyNamespace string, policyName string,
 	resourceKind string, resourceNamespace string, resourceRequestOperation ResourceRequestOperation, ruleName string, ruleResult RuleResult, ruleType RuleType,
 	ruleExecutionCause RuleExecutionCause,
 ) {
+	ctx := context.Background()
+
 	commonLabels := []attribute.KeyValue{
 		attribute.String("policy_validation_mode", string(policyValidationMode)),
 		attribute.String("policy_type", string(policyType)),
@@ -189,10 +238,13 @@ func (m *MetricsConfig) RecordPolicyResults(ctx context.Context, policyValidatio
 		attribute.String("rule_type", string(ruleType)),
 		attribute.String("rule_execution_cause", string(ruleExecutionCause)),
 	}
+
 	m.policyResultsMetric.Add(ctx, 1, commonLabels...)
 }
 
-func (m *MetricsConfig) RecordPolicyChanges(ctx context.Context, policyValidationMode PolicyValidationMode, policyType PolicyType, policyBackgroundMode PolicyBackgroundMode, policyNamespace string, policyName string, policyChangeType string) {
+func (m *MetricsConfig) RecordPolicyChanges(policyValidationMode PolicyValidationMode, policyType PolicyType, policyBackgroundMode PolicyBackgroundMode, policyNamespace string, policyName string, policyChangeType string) {
+	ctx := context.Background()
+
 	commonLabels := []attribute.KeyValue{
 		attribute.String("policy_validation_mode", string(policyValidationMode)),
 		attribute.String("policy_type", string(policyType)),
@@ -201,12 +253,45 @@ func (m *MetricsConfig) RecordPolicyChanges(ctx context.Context, policyValidatio
 		attribute.String("policy_name", policyName),
 		attribute.String("policy_change_type", policyChangeType),
 	}
+
 	m.policyChangesMetric.Add(ctx, 1, commonLabels...)
 }
 
-func (m *MetricsConfig) RecordPolicyExecutionDuration(ctx context.Context, policyValidationMode PolicyValidationMode, policyType PolicyType, policyBackgroundMode PolicyBackgroundMode, policyNamespace string, policyName string,
+func (m *MetricsConfig) RecordPolicyRuleInfo(policyValidationMode PolicyValidationMode, policyType PolicyType, policyBackgroundMode PolicyBackgroundMode, policyNamespace string, policyName string,
+	ruleName string, ruleType RuleType, status string, metricValue float64,
+) {
+	ctx := context.Background()
+	commonLabels := []attribute.KeyValue{
+		attribute.String("policy_validation_mode", string(policyValidationMode)),
+		attribute.String("policy_type", string(policyType)),
+		attribute.String("policy_background_mode", string(policyBackgroundMode)),
+		attribute.String("policy_namespace", policyNamespace),
+		attribute.String("policy_name", policyName),
+		attribute.String("rule_name", ruleName),
+		attribute.String("rule_type", string(ruleType)),
+		attribute.String("status_ready", status),
+	}
+
+	m.policyRuleInfoMetric.Observe(ctx, metricValue, commonLabels...)
+}
+
+func (m *MetricsConfig) RecordAdmissionRequests(resourceKind string, resourceNamespace string, resourceRequestOperation ResourceRequestOperation) {
+	ctx := context.Background()
+
+	commonLabels := []attribute.KeyValue{
+		attribute.String("resource_kind", resourceKind),
+		attribute.String("resource_namespace", resourceNamespace),
+		attribute.String("resource_request_operation", string(resourceRequestOperation)),
+	}
+
+	m.admissionRequestsMetric.Add(ctx, 1, commonLabels...)
+}
+
+func (m *MetricsConfig) RecordPolicyExecutionDuration(policyValidationMode PolicyValidationMode, policyType PolicyType, policyBackgroundMode PolicyBackgroundMode, policyNamespace string, policyName string,
 	ruleName string, ruleResult RuleResult, ruleType RuleType, ruleExecutionCause RuleExecutionCause, ruleExecutionLatency float64,
 ) {
+	ctx := context.Background()
+
 	commonLabels := []attribute.KeyValue{
 		attribute.String("policy_validation_mode", string(policyValidationMode)),
 		attribute.String("policy_type", string(policyType)),
@@ -218,15 +303,31 @@ func (m *MetricsConfig) RecordPolicyExecutionDuration(ctx context.Context, polic
 		attribute.String("rule_type", string(ruleType)),
 		attribute.String("rule_execution_cause", string(ruleExecutionCause)),
 	}
+
 	m.policyExecutionDurationMetric.Record(ctx, ruleExecutionLatency, commonLabels...)
 }
 
-func (m *MetricsConfig) RecordClientQueries(ctx context.Context, clientQueryOperation ClientQueryOperation, clientType ClientType, resourceKind string, resourceNamespace string) {
+func (m *MetricsConfig) RecordAdmissionReviewDuration(resourceKind string, resourceNamespace string, resourceRequestOperation string, admissionRequestLatency float64) {
+	ctx := context.Background()
+
+	commonLabels := []attribute.KeyValue{
+		attribute.String("resource_kind", resourceKind),
+		attribute.String("resource_namespace", resourceNamespace),
+		attribute.String("resource_request_operation", resourceRequestOperation),
+	}
+
+	m.admissionReviewDurationMetric.Record(ctx, admissionRequestLatency, commonLabels...)
+}
+
+func (m *MetricsConfig) RecordClientQueries(clientQueryOperation ClientQueryOperation, clientType ClientType, resourceKind string, resourceNamespace string) {
+	ctx := context.Background()
+
 	commonLabels := []attribute.KeyValue{
 		attribute.String("operation", string(clientQueryOperation)),
 		attribute.String("client_type", string(clientType)),
 		attribute.String("resource_kind", resourceKind),
 		attribute.String("resource_namespace", resourceNamespace),
 	}
+
 	m.clientQueriesMetric.Add(ctx, 1, commonLabels...)
 }

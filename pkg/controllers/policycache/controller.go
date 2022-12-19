@@ -6,14 +6,11 @@ import (
 
 	"github.com/go-logr/logr"
 	kyvernov1 "github.com/kyverno/kyverno/api/kyverno/v1"
-	"github.com/kyverno/kyverno/pkg/autogen"
 	kyvernov1informers "github.com/kyverno/kyverno/pkg/client/informers/externalversions/kyverno/v1"
 	kyvernov1listers "github.com/kyverno/kyverno/pkg/client/listers/kyverno/v1"
-	"github.com/kyverno/kyverno/pkg/clients/dclient"
 	"github.com/kyverno/kyverno/pkg/controllers"
 	pcache "github.com/kyverno/kyverno/pkg/policycache"
 	controllerutils "github.com/kyverno/kyverno/pkg/utils/controller"
-	kubeutils "github.com/kyverno/kyverno/pkg/utils/kube"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
@@ -42,18 +39,14 @@ type controller struct {
 
 	// queue
 	queue workqueue.RateLimitingInterface
-
-	// client
-	client dclient.Interface
 }
 
-func NewController(client dclient.Interface, pcache pcache.Cache, cpolInformer kyvernov1informers.ClusterPolicyInformer, polInformer kyvernov1informers.PolicyInformer) Controller {
+func NewController(pcache pcache.Cache, cpolInformer kyvernov1informers.ClusterPolicyInformer, polInformer kyvernov1informers.PolicyInformer) Controller {
 	c := controller{
 		cache:      pcache,
 		cpolLister: cpolInformer.Lister(),
 		polLister:  polInformer.Lister(),
 		queue:      workqueue.NewNamedRateLimitingQueue(workqueue.DefaultControllerRateLimiter(), ControllerName),
-		client:     client,
 	}
 	controllerutils.AddDefaultEventHandlers(logger, cpolInformer.Informer(), c.queue)
 	controllerutils.AddDefaultEventHandlers(logger, polInformer.Informer(), c.queue)
@@ -72,8 +65,7 @@ func (c *controller) WarmUp() error {
 		if key, err := cache.MetaNamespaceKeyFunc(policy); err != nil {
 			return err
 		} else {
-			subresourceGVKToKind := getSubresourceGVKToKindMap(policy, c.client)
-			c.cache.Set(key, policy, subresourceGVKToKind)
+			c.cache.Set(key, policy)
 		}
 	}
 	cpols, err := c.cpolLister.List(labels.Everything())
@@ -84,8 +76,7 @@ func (c *controller) WarmUp() error {
 		if key, err := cache.MetaNamespaceKeyFunc(policy); err != nil {
 			return err
 		} else {
-			subresourceGVKToKind := getSubresourceGVKToKindMap(policy, c.client)
-			c.cache.Set(key, policy, subresourceGVKToKind)
+			c.cache.Set(key, policy)
 		}
 	}
 	return nil
@@ -104,8 +95,7 @@ func (c *controller) reconcile(ctx context.Context, logger logr.Logger, key, nam
 		return err
 	}
 	// TODO: check resource version ?
-	subresourceGVKToKind := getSubresourceGVKToKindMap(policy, c.client)
-	c.cache.Set(key, policy, subresourceGVKToKind)
+	c.cache.Set(key, policy)
 	return nil
 }
 
@@ -115,19 +105,4 @@ func (c *controller) loadPolicy(namespace, name string) (kyvernov1.PolicyInterfa
 	} else {
 		return c.polLister.Policies(namespace).Get(name)
 	}
-}
-
-func getSubresourceGVKToKindMap(policy kyvernov1.PolicyInterface, client dclient.Interface) map[string]string {
-	subresourceGVKToKind := make(map[string]string)
-	for _, rule := range autogen.ComputeRules(policy) {
-		for _, gvk := range rule.MatchResources.GetKinds() {
-			gv, k := kubeutils.GetKindFromGVK(gvk)
-			_, subresource := kubeutils.SplitSubresource(k)
-			if subresource != "" {
-				apiResource, _, _, _ := client.Discovery().FindResource(gv, k)
-				subresourceGVKToKind[gvk] = apiResource.Kind
-			}
-		}
-	}
-	return subresourceGVKToKind
 }
